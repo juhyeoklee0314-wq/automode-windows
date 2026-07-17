@@ -37,7 +37,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/tests/",
+    "test": "npm run build && node --test dist/tests/*.test.js",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.mjs"
   }
