@@ -1,0 +1,44 @@
+{
+  "name": "automode",
+  "version": "0.1.0",
+  "description": "A mod menu for Claude Code and Codex: auto continue past usage limits, auto ping to align your limit windows with your workday",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "cli",
+    "rate-limit",
+    "pty",
+    "mod-menu",
+    "auto-continue"
+  ],
+  "license": "MIT",
+  "author": "Adriel Mendes <adriel.amendes12@gmail.com>",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "automode": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/src",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "smol-toml": "^1.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test dist/tests/",
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/fix-node-pty.mjs"
+  }
+}
