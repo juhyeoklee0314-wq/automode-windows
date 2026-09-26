@@ -2,18 +2,18 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows-port]
   pull_request:
 
 jobs:
   test:
-    # node-pty is a native module and the PTY code is POSIX; both deserve
-    # proving on more than one machine.
+    # node-pty is a native module and PTY behavior is platform-sensitive; prove
+    # the unchanged upstream baseline on Linux, macOS, and Windows.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: ["20", "22"]
 
     steps:
