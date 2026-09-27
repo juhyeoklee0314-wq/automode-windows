@@ -42,18 +42,42 @@ function rotate(path: string): void {
   }
 }
 
-/** Fire-and-forget desktop notification (macOS only, best effort). */
+/** Fire-and-forget desktop notification (best effort). */
 export function notify(title: string, message: string): void {
-  if (process.platform !== "darwin") return;
-  const clean = (s: string) => s.replace(/"/g, "'");
+  const cleanDouble = (s: string) => s.replace(/"/g, "'");
+  const cleanSingle = (s: string) => s.replace(/'/g, "''");
+
   try {
-    const child = spawn(
-      "osascript",
-      ["-e", `display notification "${clean(message)}" with title "${clean(title)}"`],
-      { stdio: "ignore", detached: true },
-    );
-    child.unref();
-    child.on("error", () => {});
+    if (process.platform === "darwin") {
+      const child = spawn(
+        "osascript",
+        ["-e", `display notification "${cleanDouble(message)}" with title "${cleanDouble(title)}"`],
+        { stdio: "ignore", detached: true },
+      );
+      child.unref();
+      child.on("error", () => {});
+      return;
+    }
+
+    if (process.platform === "win32") {
+      const shell = process.env.SystemRoot
+        ? join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+        : "powershell.exe";
+      const script =
+        "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; " +
+        "$n=New-Object System.Windows.Forms.NotifyIcon; " +
+        "$n.Icon=[System.Drawing.SystemIcons]::Information; " +
+        `$n.BalloonTipTitle='${cleanSingle(title)}'; ` +
+        `$n.BalloonTipText='${cleanSingle(message)}'; ` +
+        "$n.Visible=$true; $n.ShowBalloonTip(4000); Start-Sleep -Milliseconds 4500; $n.Dispose();";
+      const child = spawn(
+        shell,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],
+        { stdio: "ignore", detached: true, windowsHide: true },
+      );
+      child.unref();
+      child.on("error", () => {});
+    }
   } catch {
     // Notifications are decoration.
   }
