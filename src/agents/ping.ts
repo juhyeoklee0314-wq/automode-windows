@@ -7,7 +7,7 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -16,39 +16,15 @@ import { logPath, stateDir } from "../core/config.js";
 import type { Config } from "../core/config.js";
 import type { Logger } from "../core/log.js";
 import { parseHhmm } from "../core/timeutil.js";
+import { prepareSpawn, which } from "../platform/command.js";
+
+export { which } from "../platform/command.js";
 
 const run = promisify(execFile);
 
 export const LABEL = "com.automode.ping";
 export const AGENTS = ["claude", "codex"] as const;
 const PING_TIMEOUT_MS = 300_000;
-
-function runnable(path: string): boolean {
-  try {
-    if (!statSync(path).isFile()) return false;
-    accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Where a command lives, or null. `which` without spawning a shell.
- *
- * A name with a separator in it is already a path and must not be looked up on
- * PATH, which is what `shutil.which` does and what `automode -- /usr/bin/foo`
- * needs.
- */
-export function which(command: string): string | null {
-  if (command.includes("/")) return runnable(command) ? command : null;
-  for (const dir of (process.env.PATH ?? "").split(":")) {
-    if (!dir) continue;
-    const candidate = join(dir, command);
-    if (runnable(candidate)) return candidate;
-  }
-  return null;
-}
 
 export function headlessArgv(agent: string, message: string): string[] {
   if (agent === "claude") return ["claude", "-p", message];
@@ -59,12 +35,14 @@ export function headlessArgv(agent: string, message: string): string[] {
 /** Send one message to the agent, non-interactively. */
 export async function pingOnce(agent: string, message: string, log?: Logger): Promise<number> {
   const [command, ...args] = headlessArgv(agent, message);
-  if (!which(command!)) {
+  const resolved = which(command!);
+  if (!resolved) {
     log?.(`ping: ${command} not found on PATH`);
     return 127;
   }
+  const spawn = prepareSpawn([resolved, ...args]);
   try {
-    const { stdout, stderr } = await run(command!, args, { timeout: PING_TIMEOUT_MS });
+    const { stdout, stderr } = await run(spawn.command, spawn.args, { timeout: PING_TIMEOUT_MS });
     const reply = (stdout || stderr || "").trim().replace(/\n/g, " ").slice(0, 200);
     log?.(`ping ${agent} ${JSON.stringify(message)} -> rc=0 ${JSON.stringify(reply)}`);
     return 0;
