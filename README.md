@@ -112,9 +112,11 @@ This fork adds Windows support while keeping the original config, TUI, detector,
 auto-continue and auto-ping behavior.
 
 For the current Windows port, use **Node 20**. Windows + Node 20 passes the full
-upstream test suite and `automode doctor` in CI. Windows + Node 22 remains
-unresolved because node-pty 1.1.0 can hit an upstream ConPTY
-`AttachConsole failed` race.
+upstream test suite and `automode doctor` in CI and on the first real-machine
+validation. During PTY teardown, node-pty 1.1.0 can still print an
+`AttachConsole failed` helper warning even when all overlay tests pass. Windows
++ Node 22 remains unsupported for now because the same ConPTY area causes actual
+PTY overlay test failures in CI.
 
 Windows setup:
 
@@ -273,8 +275,9 @@ standard library. If you already run Claude Code you already have Node.
 - **Scheduling.** macOS uses launchd; Windows uses Task Scheduler; on Linux, point
   cron or a systemd timer at `automode ping`.
 - **Windows runtime.** Node 20 is the current known-good Windows PTY baseline.
-  Node 22 is intentionally not declared supported yet because of the upstream
-  node-pty ConPTY AttachConsole race.
+  A node-pty `AttachConsole failed` teardown warning may still appear after an
+  otherwise passing session/test. Node 22 is intentionally not declared
+  supported yet because Windows PTY overlay tests currently fail there.
 
 ## Contributing
 
