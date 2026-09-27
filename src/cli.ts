@@ -190,12 +190,15 @@ function doctor(): number {
 
   if (process.platform === "win32") {
     const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+    console.log("\nwindows runtime:");
     if (nodeMajor >= 22) {
       failures += 1;
-      console.log("\nwindows runtime:");
       console.log(`  WARNING: Node ${process.versions.node} is not a known-good Windows PTY runtime.`);
       console.log("  automode-windows currently validates interactive ConPTY sessions on Node 20.");
-      console.log("  node-pty 1.1.0 has an upstream Windows AttachConsole race on newer runtimes.");
+      console.log("  Windows + Node 22 fails PTY overlay tests in CI with node-pty 1.1.0.");
+    } else {
+      console.log(`  ok  Node ${process.versions.node}: full PTY overlay suite passes on the current Windows baseline.`);
+      console.log("  note: node-pty 1.1.0 may still print an AttachConsole warning during PTY teardown.");
     }
   }
 
