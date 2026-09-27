@@ -188,6 +188,17 @@ function doctor(): number {
     console.log("  unusable, the menu will not open");
   }
 
+  if (process.platform === "win32") {
+    const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+    if (nodeMajor >= 22) {
+      failures += 1;
+      console.log("\nwindows runtime:");
+      console.log(`  WARNING: Node ${process.versions.node} is not a known-good Windows PTY runtime.`);
+      console.log("  automode-windows currently validates interactive ConPTY sessions on Node 20.");
+      console.log("  node-pty 1.1.0 has an upstream Windows AttachConsole race on newer runtimes.");
+    }
+  }
+
   const depth = sessionDepth();
   if (depth) console.log(`\nnote: already inside ${depth} automode session(s)`);
   return failures ? 1 : 0;
