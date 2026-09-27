@@ -12,6 +12,7 @@
 
 import * as pty from "node-pty";
 
+import { prepareSpawn } from "../platform/command.js";
 import type { Overlay } from "./overlay.js";
 
 /**
@@ -52,7 +53,9 @@ export function run(
   controller: Controller,
   overlay: Overlay | null = null,
 ): Promise<number> {
-  const [command, ...args] = argv;
+  const spawn = prepareSpawn(argv);
+  const command = spawn.command;
+  const args = spawn.args;
   const interactive = process.stdin.isTTY === true;
   const cols = process.stdout.columns || 80;
   const rows = process.stdout.rows || 24;

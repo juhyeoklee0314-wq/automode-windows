@@ -38,7 +38,7 @@ const USAGE = `automode {version}: {tagline}
   automode status               show settings and what is scheduled
   automode doctor               check the detector against known limit messages
   automode ping                 send the ping now, with no session open
-  automode schedule install     schedule the ping with launchd (macOS)
+  automode schedule install     schedule configured pings for this platform
   automode schedule uninstall   remove the schedule
   automode uninstall            remove the aliases
 
@@ -90,7 +90,8 @@ async function wrap(argv: string[]): Promise<number> {
     }
   }
 
-  if (!pingmod.which(argv[0]!)) {
+  const binary = pingmod.which(argv[0]!);
+  if (!binary) {
     process.stderr.write(`automode: '${argv[0]}' is not on your PATH\n`);
     return 127;
   }
@@ -101,7 +102,7 @@ async function wrap(argv: string[]): Promise<number> {
   const controller = new Controller(config, log, new State());
   const overlay = overlaymod.build(config, argv[0], terminalSize());
   if (!overlay) log(`hotkey ${JSON.stringify(config.hotkey)} is unusable, menu off this session`);
-  return ptyRun(argv, controller, overlay);
+  return ptyRun([binary, ...argv.slice(1)], controller, overlay);
 }
 
 const onOff = (value: unknown): string => (value ? "on" : "off");
@@ -185,6 +186,20 @@ function doctor(): number {
   if (!hotkeys.length) {
     failures += 1;
     console.log("  unusable, the menu will not open");
+  }
+
+  if (process.platform === "win32") {
+    const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+    console.log("\nwindows runtime:");
+    if (nodeMajor >= 22) {
+      failures += 1;
+      console.log(`  WARNING: Node ${process.versions.node} is not a known-good Windows PTY runtime.`);
+      console.log("  automode-windows currently validates interactive ConPTY sessions on Node 20.");
+      console.log("  Windows + Node 22 fails PTY overlay tests in CI with node-pty 1.1.0.");
+    } else {
+      console.log(`  ok  Node ${process.versions.node}: full PTY overlay suite passes on the current Windows baseline.`);
+      console.log("  note: node-pty 1.1.0 may still print an AttachConsole warning during PTY teardown.");
+    }
   }
 
   const depth = sessionDepth();

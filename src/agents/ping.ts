@@ -7,7 +7,7 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -16,39 +16,16 @@ import { logPath, stateDir } from "../core/config.js";
 import type { Config } from "../core/config.js";
 import type { Logger } from "../core/log.js";
 import { parseHhmm } from "../core/timeutil.js";
+import { prepareSpawn, which } from "../platform/command.js";
+
+export { which } from "../platform/command.js";
 
 const run = promisify(execFile);
 
 export const LABEL = "com.automode.ping";
 export const AGENTS = ["claude", "codex"] as const;
 const PING_TIMEOUT_MS = 300_000;
-
-function runnable(path: string): boolean {
-  try {
-    if (!statSync(path).isFile()) return false;
-    accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Where a command lives, or null. `which` without spawning a shell.
- *
- * A name with a separator in it is already a path and must not be looked up on
- * PATH, which is what `shutil.which` does and what `automode -- /usr/bin/foo`
- * needs.
- */
-export function which(command: string): string | null {
-  if (command.includes("/")) return runnable(command) ? command : null;
-  for (const dir of (process.env.PATH ?? "").split(":")) {
-    if (!dir) continue;
-    const candidate = join(dir, command);
-    if (runnable(candidate)) return candidate;
-  }
-  return null;
-}
+const WINDOWS_TASK_PREFIX = "Automode Ping";
 
 export function headlessArgv(agent: string, message: string): string[] {
   if (agent === "claude") return ["claude", "-p", message];
@@ -59,12 +36,14 @@ export function headlessArgv(agent: string, message: string): string[] {
 /** Send one message to the agent, non-interactively. */
 export async function pingOnce(agent: string, message: string, log?: Logger): Promise<number> {
   const [command, ...args] = headlessArgv(agent, message);
-  if (!which(command!)) {
+  const resolved = which(command!);
+  if (!resolved) {
     log?.(`ping: ${command} not found on PATH`);
     return 127;
   }
+  const spawn = prepareSpawn([resolved, ...args]);
   try {
-    const { stdout, stderr } = await run(command!, args, { timeout: PING_TIMEOUT_MS });
+    const { stdout, stderr } = await run(spawn.command, spawn.args, { timeout: PING_TIMEOUT_MS });
     const reply = (stdout || stderr || "").trim().replace(/\n/g, " ").slice(0, 200);
     log?.(`ping ${agent} ${JSON.stringify(message)} -> rc=0 ${JSON.stringify(reply)}`);
     return 0;
@@ -73,6 +52,122 @@ export async function pingOnce(agent: string, message: string, log?: Logger): Pr
     log?.(`ping ${agent}: failed (${code})`);
     return typeof code === "number" ? code : 1;
   }
+}
+
+
+interface WindowsScheduleReceipt {
+  tasks: string[];
+}
+
+const windowsReceiptPath = (): string => join(stateDir(), "windows-schedule.json");
+
+function windowsTaskName(time: string): string {
+  return `${WINDOWS_TASK_PREFIX} ${time.replace(":", "")}`;
+}
+
+function windowsTaskCommand(): string {
+  const script = process.argv[1];
+  if (!script) throw new Error("cannot determine automode CLI path");
+  const quote = (value: string) => `"${value.replace(/"/g, '\\"')}"`;
+  return `${quote(process.execPath)} ${quote(script)} ping`;
+}
+
+function schtasks(args: string[]): { ok: boolean; err: string } {
+  try {
+    execFileSync("schtasks.exe", args, { stdio: "pipe" });
+    return { ok: true, err: "" };
+  } catch (error) {
+    const stderr = (error as { stderr?: Buffer }).stderr;
+    return { ok: false, err: String(stderr ?? error).trim() };
+  }
+}
+
+function readWindowsReceipt(): WindowsScheduleReceipt {
+  try {
+    const raw = JSON.parse(readFileSync(windowsReceiptPath(), "utf8")) as Partial<WindowsScheduleReceipt>;
+    return { tasks: Array.isArray(raw.tasks) ? raw.tasks.map(String) : [] };
+  } catch {
+    return { tasks: [] };
+  }
+}
+
+function removeWindowsTasks(tasks: string[]): void {
+  for (const task of tasks) schtasks(["/Delete", "/TN", task, "/F"]);
+}
+
+function installWindows(config: Config): number {
+  const times = (config.ping?.times ?? [])
+    .map((entry) => String(entry))
+    .filter((entry) => parseHhmm(entry) !== null);
+  if (!times.length) {
+    console.log("automode: no valid ping times configured.");
+    return 1;
+  }
+
+  const old = readWindowsReceipt();
+  removeWindowsTasks(old.tasks);
+
+  const command = windowsTaskCommand();
+  const created: string[] = [];
+  for (const time of times) {
+    const task = windowsTaskName(time);
+    const result = schtasks([
+      "/Create",
+      "/F",
+      "/SC",
+      "DAILY",
+      "/ST",
+      time,
+      "/TN",
+      task,
+      "/TR",
+      command,
+      "/IT",
+    ]);
+    if (!result.ok) {
+      removeWindowsTasks(created);
+      console.log(`automode: Task Scheduler failed for ${time}: ${result.err}`);
+      return 1;
+    }
+    created.push(task);
+  }
+
+  mkdirSync(stateDir(), { recursive: true });
+  writeFileSync(windowsReceiptPath(), JSON.stringify({ tasks: created }, null, 2), "utf8");
+
+  console.log("automode: scheduled with Windows Task Scheduler.");
+  console.log(`  times:    ${times.join(", ")}`);
+  console.log(`  action:   ${command}`);
+  console.log(`  receipt:  ${windowsReceiptPath()}`);
+  console.log();
+  console.log("NOTE: these tasks run only while your Windows user is logged on.");
+  console.log("Task Scheduler wake-from-sleep is not enabled by this command.");
+  return 0;
+}
+
+function uninstallWindows(): number {
+  const receipt = readWindowsReceipt();
+  removeWindowsTasks(receipt.tasks);
+  if (existsSync(windowsReceiptPath())) unlinkSync(windowsReceiptPath());
+  if (receipt.tasks.length) console.log(`automode: removed ${receipt.tasks.length} Windows scheduled task(s)`);
+  else console.log("automode: no recorded Windows scheduled tasks");
+  return 0;
+}
+
+function statusWindows(): number {
+  const receipt = readWindowsReceipt();
+  if (!receipt.tasks.length) {
+    console.log("Task Scheduler: not installed (use `automode schedule install`)");
+    return 0;
+  }
+  console.log("Task Scheduler:");
+  for (const task of receipt.tasks) {
+    const result = schtasks(["/Query", "/TN", task]);
+    console.log(`  ${result.ok ? "installed" : "MISSING "}  ${task}`);
+  }
+  console.log(`  receipt: ${windowsReceiptPath()}`);
+  console.log(`  automode log: ${logPath()}`);
+  return 0;
 }
 
 export const plistPath = (): string =>
@@ -174,9 +269,11 @@ export function earliest(times: string[]): string | null {
 }
 
 export function install(config: Config): number {
+  if (process.platform === "win32") return installWindows(config);
+
   const { times = [], agent = "claude", message = "hi" } = config.ping ?? {};
   if (process.platform !== "darwin") {
-    console.log("automode: launchd scheduling is macOS only.");
+    console.log("automode: built-in scheduling supports macOS and Windows; use cron/systemd on Linux.");
     return 1;
   }
   let plist: string;
@@ -219,6 +316,8 @@ export function install(config: Config): number {
 }
 
 export function uninstall(): number {
+  if (process.platform === "win32") return uninstallWindows();
+
   const path = plistPath();
   launchctl(["bootout", `gui/${process.getuid?.() ?? 501}/${LABEL}`]);
   launchctl(["unload", path]);
@@ -231,6 +330,8 @@ export function uninstall(): number {
 }
 
 export function status(): number {
+  if (process.platform === "win32") return statusWindows();
+
   const path = plistPath();
   if (!existsSync(path)) {
     console.log("launchd:  not installed (use `automode schedule install`)");

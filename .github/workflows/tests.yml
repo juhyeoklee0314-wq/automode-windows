@@ -1,20 +1,40 @@
 name: tests
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, windows-port]
   pull_request:
 
 jobs:
   test:
-    # node-pty is a native module and the PTY code is POSIX; both deserve
-    # proving on more than one machine.
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: ["20", "22"]
+        include:
+          - os: ubuntu-latest
+            node: "20"
+            experimental: false
+          - os: ubuntu-latest
+            node: "22"
+            experimental: false
+          - os: macos-latest
+            node: "20"
+            experimental: false
+          - os: macos-latest
+            node: "22"
+            experimental: false
+          - os: windows-latest
+            node: "20"
+            experimental: false
+          # node-pty 1.1.0 currently has an upstream ConPTY AttachConsole race
+          # on newer Windows/Node combinations. Keep it visible without making
+          # the known-good Windows Node 20 port look broken.
+          - os: windows-latest
+            node: "22"
+            experimental: true
 
     steps:
       - uses: actions/checkout@v4

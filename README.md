@@ -104,7 +104,49 @@ ctrl+g          the mod menu, from inside a session
 automode menu   the same menu, from outside
 ```
 
-Requires Node 20+ and macOS or Linux.
+Requires Node 20+ on macOS/Linux.
+
+### Windows port
+
+This fork adds Windows support while keeping the original config, TUI, detector,
+auto-continue and auto-ping behavior.
+
+For the current Windows port, use **Node 20**. Windows + Node 20 passes the full
+upstream test suite and `automode doctor` in CI and on the first real-machine
+validation. During PTY teardown, node-pty 1.1.0 can still print an
+`AttachConsole failed` helper warning even when all overlay tests pass. Windows
++ Node 22 remains unsupported for now because the same ConPTY area causes actual
+PTY overlay test failures in CI.
+
+Windows setup:
+
+```powershell
+npm install -g .
+automode install
+```
+
+`automode install` adds PowerShell wrapper functions for `claude` and `codex`
+to the current-user PowerShell profile. Open a new PowerShell window afterwards,
+or reload it with:
+
+```powershell
+. $PROFILE
+```
+
+Scheduled pings use Windows Task Scheduler:
+
+```powershell
+automode menu
+automode schedule install
+automode schedule status
+```
+
+The scheduled action reads the current config at run time, so changing the ping
+agent or message does not require reinstalling the schedule. Changing the list
+of scheduled times does require running `automode schedule install` again.
+
+The current Windows scheduler creates interactive current-user tasks, so the
+Windows user must be logged on. Wake-from-sleep is not enabled automatically.
 
 ### Turn on the 5am ping
 
@@ -230,8 +272,12 @@ standard library. If you already run Claude Code you already have Node.
 - **The detector depends on a sentence Anthropic and OpenAI can change whenever they
   like.** `automode doctor` runs in CI, so a change breaks the build loudly instead of
   breaking auto continue silently at 3am.
-- **macOS and Linux.** The scheduler currently only speaks launchd; on Linux, point
+- **Scheduling.** macOS uses launchd; Windows uses Task Scheduler; on Linux, point
   cron or a systemd timer at `automode ping`.
+- **Windows runtime.** Node 20 is the current known-good Windows PTY baseline.
+  A node-pty `AttachConsole failed` teardown warning may still appear after an
+  otherwise passing session/test. Node 22 is intentionally not declared
+  supported yet because Windows PTY overlay tests currently fail there.
 
 ## Contributing
 
