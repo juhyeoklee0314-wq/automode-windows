@@ -6,11 +6,10 @@
  * usage window and exits.
  */
 
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { promisify } from "node:util";
 
 import { logPath, stateDir } from "../core/config.js";
 import type { Config } from "../core/config.js";
@@ -19,8 +18,6 @@ import { parseHhmm } from "../core/timeutil.js";
 import { prepareSpawn, which } from "../platform/command.js";
 
 export { which } from "../platform/command.js";
-
-const run = promisify(execFile);
 
 export const LABEL = "com.automode.ping";
 export const AGENTS = ["claude", "codex"] as const;
@@ -34,24 +31,51 @@ export function headlessArgv(agent: string, message: string): string[] {
 }
 
 /** Send one message to the agent, non-interactively. */
-export async function pingOnce(agent: string, message: string, log?: Logger): Promise<number> {
+export interface PingOnceOptions {
+  env?: NodeJS.ProcessEnv;
+  onResolved?: (path: string) => void;
+}
+
+export async function pingOnce(agent: string, message: string, log?: Logger, options: PingOnceOptions = {}): Promise<number> {
   const [command, ...args] = headlessArgv(agent, message);
   const resolved = which(command!);
   if (!resolved) {
     log?.(`ping: ${command} not found on PATH`);
     return 127;
   }
+  options.onResolved?.(resolved);
   const spawn = prepareSpawn([resolved, ...args]);
-  try {
-    const { stdout, stderr } = await run(spawn.command, spawn.args, { timeout: PING_TIMEOUT_MS });
-    const reply = (stdout || stderr || "").trim().replace(/\n/g, " ").slice(0, 200);
-    log?.(`ping ${agent} ${JSON.stringify(message)} -> rc=0 ${JSON.stringify(reply)}`);
-    return 0;
-  } catch (error) {
-    const code = (error as { code?: number }).code ?? 1;
-    log?.(`ping ${agent}: failed (${code})`);
-    return typeof code === "number" ? code : 1;
-  }
+  return runPingProcess(spawn.command, spawn.args, agent, log, options.env);
+}
+
+function runPingProcess(command: string, args: string[], agent: string, log?: Logger, env?: NodeJS.ProcessEnv): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
+    let settled = false;
+    child.stdout?.resume();
+    child.stderr?.resume();
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) log?.(`ping ${agent} -> rc=0`);
+      else log?.(`ping ${agent}: failed (${code})`);
+      resolve(code);
+    };
+    const timer = setTimeout(() => {
+      if (child.pid && process.platform === "win32") {
+        execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+      }
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      finish(124);
+    }, PING_TIMEOUT_MS);
+    timer.unref();
+    child.once("error", (error) => {
+      log?.(`ping ${agent}: spawn failed (${String((error as NodeJS.ErrnoException).code ?? error)})`);
+      finish(127);
+    });
+    child.once("close", (code, signal) => finish(signal ? 128 : (code ?? 1)));
+  });
 }
 
 

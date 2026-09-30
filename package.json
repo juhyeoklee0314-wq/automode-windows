@@ -21,6 +21,7 @@
   "bin": {
     "automode": "dist/src/cli.js"
   },
+  "main": "dist/src/gui/main.js",
   "files": [
     "dist/src",
     "scripts",
@@ -33,12 +34,54 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "electron": "^37.4.0",
+    "electron-builder": "^26.0.12",
     "typescript": "^5.7.2"
   },
   "scripts": {
     "build": "tsc",
+    "gui": "npm run build && electron .",
+    "gui:dry-run": "npm run build && set AUTOMODE_SCHEDULER_DRY_RUN=1&& electron .",
+    "package:win": "npm run build && electron-builder --win nsis portable",
+    "package:win:phase6": "npm run build && electron-builder --win nsis portable --config.directories.output=release-phase6-diagnostic",
+    "package:win:phase7": "npm run build && electron-builder --win nsis portable --config.directories.output=release-phase7-pinggpt-diagnostic",
     "test": "npm run build && node scripts/run-tests.mjs",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.mjs"
+  },
+  "build": {
+    "appId": "com.automode.windows",
+    "productName": "PingGPT",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/src/**/*",
+      "src/gui/renderer/**/*",
+      "src/gui/assets/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "src/gui/assets/pinggpt.ico",
+      "executableName": "PingGPT",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "artifactName": "PingGPT-Windows-Setup-${version}-${arch}.${ext}",
+      "installerIcon": "src/gui/assets/pinggpt.ico",
+      "uninstallerIcon": "src/gui/assets/pinggpt.ico",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "PingGPT-Windows-Portable-${version}-${arch}.${ext}"
+    }
   }
 }

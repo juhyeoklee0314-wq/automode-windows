@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>PingGPT</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand"><img class="brand-mark" src="../assets/pinggpt-tray-64.png" alt=""><div><strong>PingGPT</strong><small>Windows control plane</small></div></div>
+      <nav>
+        <button class="nav active" data-page="overview">Overview</button>
+        <button class="nav" data-page="automation">Automation</button>
+        <button class="nav" data-page="diagnostics">Diagnostics</button>
+        <button class="nav" data-page="logs">Logs</button>
+      </nav>
+      <div class="aside-foot"><span id="version">v0.1.0</span><span class="dot" id="lease-dot"></span><span id="lease-label">Loading</span></div>
+    </aside>
+    <main>
+      <header><div><p class="eyebrow">PINGGPT FOR WINDOWS</p><h1 id="page-title">Overview</h1></div><div class="header-actions"><button class="secondary" id="save">Save changes</button><button class="danger ghost" id="exit">Exit PingGPT</button></div></header>
+      <div id="banner" class="banner hidden"></div>
+
+      <section class="page active" id="page-overview">
+        <div class="hero card"><div><span class="status-pill" id="status-pill">Checking…</span><h2>Scheduled help, quietly running.</h2><p>Closing this window keeps PingGPT in the system tray. Use Exit to stop the app and disarm scheduled pings.</p></div><div class="next"><small>NEXT PING</small><strong id="next-ping">—</strong><span id="next-detail">No schedule armed</span></div></div>
+        <div class="grid two">
+          <article class="card"><div class="card-title"><div><h3>Auto Continue</h3><p>Continue after an agent limit resets.</p></div><label class="switch"><input id="auto-continue" type="checkbox"><span></span></label></div><label>Continue message<input id="continue-message" type="text" maxlength="500"></label><div class="row"><label>Grace period (seconds)<input id="grace" type="number" min="0" max="3600"></label><label>Idle guard (seconds)<input id="idle-guard" type="number" min="0" max="300"></label></div></article>
+          <article class="card"><div class="card-title"><div><h3>Agent status</h3><p>Detected command-line agents.</p></div></div><div class="agent"><span class="agent-icon claude">C</span><div><strong>Claude</strong><small id="claude-path">Checking…</small></div><span class="badge" id="claude-badge">—</span></div><div class="agent"><span class="agent-icon codex">X</span><div><strong>Codex</strong><small id="codex-path">Checking…</small></div><span class="badge" id="codex-badge">—</span></div></article>
+        </div>
+        <article class="card"><div class="card-title"><div><h3>Windows startup</h3><p>Start PingGPT in the tray when you sign in.</p></div><label class="switch"><input id="run-at-login" type="checkbox"><span></span></label></div></article>
+      </section>
+
+      <section class="page" id="page-automation">
+        <article class="card accent-card"><div class="card-title"><div><h3>Auto Ping</h3><p>Keep usage windows aligned without opening a terminal.</p></div><label class="switch"><input id="auto-ping" type="checkbox"><span></span></label></div><div class="row"><label>Agent<select id="ping-agent"><option value="claude">Claude</option><option value="codex">Codex</option></select></label><label>Catch-up window (minutes)<input id="catchup" type="number" min="0" max="180"></label></div><label>Ping message<textarea id="ping-message" maxlength="2000" rows="3"></textarea></label></article>
+        <article class="card"><div class="card-title"><div><h3>Ping times</h3><p>Daily times in the configured timezone.</p></div><button class="secondary small" id="add-time">+ Add time</button></div><div id="times" class="times"></div></article>
+        <article class="card"><div class="card-title"><div><h3>Scheduler state</h3><p>Only PingGPT-managed GUI tasks are managed. Existing CLI tasks are untouched.</p></div></div><div id="task-list" class="task-list"></div><p class="path" id="config-path"></p></article>
+      </section>
+
+      <section class="page" id="page-diagnostics">
+        <article class="card"><div class="card-title"><div><h3>Diagnostic snapshot</h3><p>Save a redacted support snapshot to your Desktop.</p></div><button class="secondary small" id="export-diagnostic">진단 로그 저장</button></div><p class="path" id="diagnostic-result"></p></article>
+        <article class="card"><div class="card-title"><div><h3>Doctor</h3><p>Checks detectors, agents, and the live GUI lease.</p></div><button class="secondary small" id="run-doctor">Run checks</button></div><div id="doctor-results" class="checks"><p class="muted">Run checks to see results.</p></div></article>
+        <article class="card note"><h3>Safety model</h3><p>The scheduler runs only while a live PingGPT tray process renews its lease. A crash or forced kill stops future pings after the lease expires. Duplicate account/date/schedule executions are rejected.</p></article>
+      </section>
+
+      <section class="page" id="page-logs">
+        <article class="card log-card"><div class="card-title"><div><h3>Recent log</h3><p id="log-path"></p></div><div><button class="secondary small" id="refresh-log">Refresh</button><button class="secondary small" id="open-log">Open folder</button></div></div><pre id="log-content">Loading…</pre></article>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

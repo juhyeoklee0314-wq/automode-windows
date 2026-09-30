@@ -7,10 +7,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { logPath, stateDir } from "./config.js";
+import { redactSecrets } from "./redact.js";
 
 const MAX_LOG_BYTES = 1_000_000;
 
@@ -27,7 +28,7 @@ export function createLogger(enabled = true, path: string = logPath()): Logger {
     try {
       mkdirSync(stateDir(), { recursive: true });
       rotate(path);
-      appendFileSync(path, `[${stamp}] ${message}\n`, "utf8");
+      appendFileSync(path, `[${stamp}] ${redactSecrets(message)}\n`, "utf8");
     } catch {
       // Logging must never take a session down.
     }
@@ -36,7 +37,15 @@ export function createLogger(enabled = true, path: string = logPath()): Logger {
 
 function rotate(path: string): void {
   try {
-    if (statSync(path).size > MAX_LOG_BYTES) renameSync(path, `${path}.1`);
+    if (statSync(path).size > MAX_LOG_BYTES) {
+      try {
+        if (existsSync(`${path}.1`)) unlinkSync(`${path}.1`);
+        renameSync(path, `${path}.1`);
+      } catch {
+        // Rotation is best effort; logging must not take down the app.
+        return;
+      }
+    }
   } catch {
     // No file yet, or no permission. Either way, nothing to rotate.
   }
