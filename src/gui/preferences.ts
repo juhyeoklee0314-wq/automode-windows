@@ -47,6 +47,8 @@ export function defaults(config: Config): GuiPreferences {
       schedules: [...config.ping.times],
       agent: config.ping.agent === "codex" ? "codex" : "claude",
       catchupMinutes: clampCatchup(config.ping.catchup_minutes, 30),
+    wakePc: true,
+      wakePc: false,
     }],
   };
 }
@@ -83,6 +85,7 @@ function projectPreferences(raw: Partial<GuiPreferences>, config: Config): GuiPr
       schedules: Array.isArray(account.schedules) ? account.schedules.map(String) : [...config.ping.times],
       agent: account.agent === "codex" ? "codex" as const : "claude" as const,
       catchupMinutes: clampCatchup(account.catchupMinutes, config.ping.catchup_minutes),
+      wakePc: account.wakePc === true,
     };
   });
   return {
