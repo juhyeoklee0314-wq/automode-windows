@@ -15,7 +15,7 @@ import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
 import { TRAY_ICON_RELATIVE_PATH, trayIconPath } from "../src/gui/tray-icon.js";
 import { DEFAULTS } from "../src/core/config.js";
-import { commandCandidates } from "../src/platform/command.js";
+import { commandCandidates, prepareStdioSpawn } from "../src/platform/command.js";
 import { DIAGNOSTIC_LOG_PATH, DiagnosticTrace } from "../src/gui/diagnostics.js";
 import { resolveProcessMode } from "../src/gui/routing.js";
 
@@ -70,6 +70,34 @@ describe("Windows command resolution", () => {
       commandCandidates("C:\\npm\\codex.cmd", "win32", ".COM;.EXE;.BAT;.CMD"),
       ["C:\\npm\\codex.cmd"],
     );
+  });
+
+  it("routes long-lived Windows cmd shims through cmd.exe so redirected stdin survives", () => {
+    const oldComSpec = process.env.ComSpec;
+    process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+    try {
+      const prepared = prepareStdioSpawn(
+        "C:\\Program Files\\npm\\codex.cmd",
+        ["app-server", "--listen", "stdio://"],
+      );
+      if (process.platform === "win32") {
+        assert.equal(prepared.command, "C:\\Windows\\System32\\cmd.exe");
+        assert.deepEqual(prepared.args, [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\Program Files\\npm\\codex.cmd\" \"app-server\" \"--listen\" \"stdio://\"",
+        ]);
+      } else {
+        assert.deepEqual(prepared, {
+          command: "C:\\Program Files\\npm\\codex.cmd",
+          args: ["app-server", "--listen", "stdio://"],
+        });
+      }
+    } finally {
+      if (oldComSpec === undefined) delete process.env.ComSpec;
+      else process.env.ComSpec = oldComSpec;
+    }
   });
 });
 
