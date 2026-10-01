@@ -60,6 +60,7 @@ describe("multi-account profile persistence", () => {
     const loaded = loadPreferences(DEFAULTS);
     assert.equal(loaded.accounts.length, 1);
     assert.equal(loaded.accounts[0]?.catchupMinutes, DEFAULTS.ping.catchup_minutes);
+    assert.equal(loaded.accounts[0]?.wakePc, false);
   });
 
   it("creates independent Codex homes and safe unique profile ids", () => {
@@ -67,6 +68,7 @@ describe("multi-account profile persistence", () => {
     const second = newAccountProfile(DEFAULTS, [first]);
     assert.equal(first.agent, "codex");
     assert.equal(first.enabled, false);
+    assert.equal(first.wakePc, true);
     assert.notEqual(first.id, second.id);
     assert.match(first.id, /^profile-[A-Za-z0-9_.-]+$/);
     assert.ok(first.codexHome?.startsWith(codexProfilesRoot()));
@@ -143,12 +145,28 @@ describe("multi-account scheduler reconciliation", () => {
       return { ok: true, output: "Ready" };
     }, receipt);
     scheduler.install([
-      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const },
-      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const },
+      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
+      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
     ]);
     assert.equal(actions.length, 2);
     assert.match(actions[0] ?? "", /"profile-a"/);
     assert.match(actions[1] ?? "", /"profile-a-long"/);
+  });
+
+  it("configures wake only for selected profiles and keeps every task AC-only", () => {
+    const receipt = join(root, "schedule-power.json");
+    const calls: string[][] = [];
+    const scheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", (args) => {
+      calls.push(args);
+      return { ok: true, output: "Ready" };
+    }, receipt);
+    scheduler.install([
+      { id: "wake", displayName: "Wake", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
+      { id: "no-wake", displayName: "No Wake", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
+    ]);
+    const powerCalls = calls.filter((args) => args[0] === "@ConfigurePower");
+    assert.equal(powerCalls.length, 2);
+    assert.deepEqual(powerCalls.map((args) => args[2]), ["true", "false"]);
   });
 });
 
