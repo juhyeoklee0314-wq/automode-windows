@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, shell, Tray } from "electron";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,8 @@ import { exportDiagnosticSnapshot } from "./diagnostic-export.js";
 import { DIAGNOSTIC_CHANNEL } from "./channels.js";
 import { BUILD_IDENTITY, DIAGNOSTIC_LOG_PATH, DIAGNOSTIC_RECEIPT_PATH, DiagnosticTrace } from "./diagnostics.js";
 import { loadDiagnosticPreferences, loadPreferences, savePreferences } from "./preferences.js";
+import { requestWindowsSleep } from "./power-control.js";
+import { recordResume, recordSuspend } from "./power-state.js";
 import { resolveProcessMode } from "./routing.js";
 import { runScheduled, runScheduledDryRun } from "./scheduled-runner.js";
 import { schedulerExecutable, WindowsScheduler } from "./scheduler.js";
@@ -27,7 +29,14 @@ trace.emit("START_01_MAIN_ENTRY", "main", { execPath: process.execPath, mode: mo
 
 if (mode.kind === "scheduled") {
   trace.emit("START_02_MODE_ROUTED", "scheduled");
-  runScheduled(mode.accountId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
+  app.whenReady()
+    .then(() => runScheduled(mode.accountId, mode.scheduleId, new Date(), trace, {
+      isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
+      getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
+      requestSleep: () => requestWindowsSleep(),
+    }))
+    .then((code) => app.exit(code))
+    .catch(() => app.exit(1));
 } else if (mode.kind === "scheduled-dry-run") {
   trace.emit("START_02_MODE_ROUTED", "dry_run");
   runScheduledDryRun(mode.accountId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
@@ -129,6 +138,19 @@ function startGui(): void {
 
   app.whenReady().then(() => {
     trace.emit("START_04_APP_READY", "main");
+
+    powerMonitor.on("suspend", () => {
+      if (diagnosticStartup) return;
+      recordSuspend();
+      trace.emit("POWER_SUSPEND_RECORDED", "main");
+    });
+    powerMonitor.on("resume", () => {
+      if (diagnosticStartup) return;
+      recordResume();
+      const resumePreferences = loadPreferences(configmod.load());
+      if (resumePreferences.schedulerEnabled) writeLease(true);
+      trace.emit("POWER_RESUME_RECORDED", "main", { schedulerEnabled: resumePreferences.schedulerEnabled });
+    });
     trace.emit("START_11_WINDOW_CREATE_BEGIN", "main");
     window = new BrowserWindow({
       width: 1160,
