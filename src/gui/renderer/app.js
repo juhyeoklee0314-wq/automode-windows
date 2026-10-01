@@ -79,7 +79,7 @@ function accountCard(account, saved = true) {
   head.className = "account-head";
 
   const nameLabel = document.createElement("label");
-  nameLabel.textContent = "Profile name";
+  nameLabel.textContent = "Profile name (local label)";
   const nameInput = document.createElement("input");
   nameInput.className = "account-name";
   nameInput.type = "text";
@@ -166,7 +166,7 @@ function accountCard(account, saved = true) {
   authCopy.className = "auth-copy";
   const authTitle = document.createElement("strong");
   authTitle.className = "account-auth-identity";
-  authTitle.textContent = "ChatGPT account";
+  authTitle.textContent = "Actual ChatGPT account";
   const authMeta = document.createElement("small");
   authMeta.className = "account-auth-meta";
   authMeta.textContent = saved ? "Reading account identity from Codex…" : "Save this profile to read account identity";
@@ -330,7 +330,7 @@ function applyAuthStatus(status) {
   if (status.state === "connected") {
     el.textContent = status.identityVerified === false ? "CONNECTED · IDENTITY UNKNOWN" : "CONNECTED";
     el.classList.add("ok");
-    if (identity) identity.textContent = status.email || "ChatGPT account";
+    if (identity) identity.textContent = status.email || "Actual ChatGPT account";
     if (meta) {
       const plan = formatPlanType(status.planType);
       if (status.identityVerified === true) {
@@ -343,12 +343,12 @@ function applyAuthStatus(status) {
     }
   } else if (status.state === "login_started") {
     el.textContent = "LOGIN STARTED";
-    if (identity) identity.textContent = "ChatGPT account";
+    if (identity) identity.textContent = "Actual ChatGPT account";
     if (meta) meta.textContent = "Waiting for browser login to complete…";
   } else if (status.state === "wrong_auth") {
     el.textContent = "NOT CHATGPT AUTH";
     el.classList.add("bad");
-    if (identity) identity.textContent = "ChatGPT account";
+    if (identity) identity.textContent = "Actual ChatGPT account";
     if (meta) meta.textContent = "Codex is authenticated with a non-ChatGPT credential";
   } else if (status.state === "not_codex") {
     el.textContent = "NOT CODEX";
@@ -361,7 +361,7 @@ function applyAuthStatus(status) {
   } else {
     el.textContent = "NOT CONNECTED";
     el.classList.add("bad");
-    if (identity) identity.textContent = "ChatGPT account";
+    if (identity) identity.textContent = "Actual ChatGPT account";
     if (meta) meta.textContent = "No ChatGPT login is active for this profile";
   }
 }
