@@ -128,3 +128,27 @@ export function prepareSpawn(argv: string[]): SpawnSpec {
   const line = [command, ...args].map(cmdQuote).join(" ");
   return { command: shell, args: ["/d", "/s", "/c", line] };
 }
+
+
+function quoteCmdToken(value: string): string {
+  return '"' + value.replace(/([%])/g, "$1$1").replace(/"/g, '""') + '"';
+}
+
+/**
+ * Prepare a long-lived stdio child on Windows.
+ * npm .cmd/.bat shims are routed through cmd.exe instead of the sibling
+ * PowerShell shim because PowerShell does not transparently forward a
+ * redirected stdin stream to the native grandchild used by Codex app-server.
+ */
+export function prepareStdioSpawn(command: string, args: string[]): PreparedSpawn {
+  if (process.platform !== "win32" || !/\.(?:cmd|bat)$/i.test(command)) {
+    return { command, args };
+  }
+
+  const comspec = process.env.ComSpec || process.env.COMSPEC || "cmd.exe";
+  const inner = [quoteCmdToken(command), ...args.map(quoteCmdToken)].join(" ");
+  return {
+    command: comspec,
+    args: ["/d", "/s", "/c", inner],
+  };
+}
