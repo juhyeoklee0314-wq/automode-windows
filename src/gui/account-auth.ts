@@ -32,7 +32,7 @@ export function parseCodexDeviceLoginPrompt(output: string): CodexDeviceLoginPro
   const urlMatch = clean.match(/https:\/\/[^\s]+\/codex\/device\b/i);
   const codeMatch = clean.match(/Enter this one-time code[\s\S]{0,240}?\n\s*([A-Z0-9-]{4,32})\b/i);
   if (!urlMatch || !codeMatch) return null;
-  return { loginUrl: urlMatch[0], loginCode: codeMatch[1] };
+  return { loginUrl: urlMatch[0]!, loginCode: codeMatch[1]! };
 }
 
 function accountEnv(account: AccountProfile): NodeJS.ProcessEnv {
@@ -108,7 +108,7 @@ async function runStatus(command: string, account: AccountProfile): Promise<Stat
       clearTimeout(timer);
       resolve({ code, output });
     };
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       killTree(child.pid);
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
       finish(124);
@@ -232,7 +232,7 @@ async function readCodexAccountIdentity(command: string, account: AccountProfile
     });
 
     timer = setTimeout(() => finish(null), IDENTITY_TIMEOUT_MS);
-    timer.unref();
+    timer?.unref();
   });
 }
 
@@ -358,7 +358,7 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
       finish(baseStatus(account, "not_connected", detail));
     });
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       activeLoginProcesses.delete(account.id);
       finish(baseStatus(account, "not_connected", "Timed out waiting for Codex device authorization instructions."));
     }, LOGIN_PROMPT_TIMEOUT_MS);
