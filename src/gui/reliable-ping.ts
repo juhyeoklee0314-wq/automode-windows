@@ -14,16 +14,25 @@ export interface ReliablePingOptions {
   onResolved?: (path: string) => void;
 }
 
-async function defaultNetworkReady(timeoutMs: number): Promise<boolean> {
-  try {
-    await Promise.race([
-      lookup("chatgpt.com"),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("network timeout")), timeoutMs)),
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function waitForNetworkReady(timeoutMs: number, probeIntervalMs = 1_500): Promise<boolean> {
+  const timeout = Math.max(1_000, timeoutMs);
+  const deadline = Date.now() + timeout;
+  do {
+    const remaining = Math.max(1, deadline - Date.now());
+    try {
+      await Promise.race([
+        lookup("chatgpt.com"),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("network probe timeout")), Math.min(3_000, remaining))),
+      ]);
+      return true;
+    } catch {
+      if (Date.now() >= deadline) return false;
+      await sleep(Math.min(probeIntervalMs, Math.max(0, deadline - Date.now())));
+    }
+  } while (Date.now() < deadline);
+  return false;
 }
 
 export async function reliablePing(
@@ -34,7 +43,7 @@ export async function reliablePing(
 ): Promise<number> {
   const attempts = Math.max(1, Math.min(options.attempts ?? 2, 3));
   const retryDelayMs = Math.max(0, options.retryDelayMs ?? 4_000);
-  const ready = options.waitForNetwork ?? (() => defaultNetworkReady(options.networkTimeoutMs ?? 10_000));
+  const ready = options.waitForNetwork ?? (() => waitForNetworkReady(options.networkTimeoutMs ?? 10_000));
   const send = options.ping ?? ((selectedAgent, selectedMessage, selectedLog) =>
     pingOnce(selectedAgent, selectedMessage, selectedLog, { env: options.env, unsetEnv: options.unsetEnv, onResolved: options.onResolved }));
 
@@ -48,7 +57,7 @@ export async function reliablePing(
     if (code === 0) return 0;
     if (attempt < attempts) {
       log?.(`ping: attempt ${attempt} failed (rc=${code}); one bounded retry follows`);
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      await sleep(retryDelayMs);
     }
   }
   return code;
