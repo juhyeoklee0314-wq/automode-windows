@@ -10,6 +10,7 @@ const LOGIN_PROMPT_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE = 64 * 1024;
 
 const activeLoginProcesses = new Map<string, ReturnType<typeof spawn>>();
+const activeLoginPrompts = new Map<string, CodexDeviceLoginPrompt>();
 
 interface StatusResult { code: number; output: string }
 
@@ -240,6 +241,19 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
   if (account.agent !== "codex") {
     return baseStatus(account, "not_codex", "Account uses Claude; Codex login is not required.");
   }
+
+  const pendingProcess = activeLoginProcesses.get(account.id);
+  const pendingPrompt = activeLoginPrompts.get(account.id);
+  if (pendingProcess && pendingPrompt && pendingProcess.exitCode === null) {
+    return {
+      accountId: account.id,
+      state: "login_started",
+      detail: "Device login is waiting for authorization.",
+      loginUrl: pendingPrompt.loginUrl,
+      loginCode: pendingPrompt.loginCode,
+    };
+  }
+
   const resolved = which("codex");
   if (!resolved) return baseStatus(account, "cli_missing", "Codex CLI was not found on PATH.");
 
@@ -283,6 +297,7 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
   if (previous?.pid) {
     killTree(previous.pid);
     activeLoginProcesses.delete(account.id);
+    activeLoginPrompts.delete(account.id);
   }
 
   const native = resolveCodexNativeExecutable(resolved);
@@ -310,6 +325,7 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
     const inspectPrompt = () => {
       const prompt = parseCodexDeviceLoginPrompt(captured);
       if (prompt) {
+        activeLoginPrompts.set(account.id, prompt);
         return finish({
           accountId: account.id,
           state: "login_started",
@@ -345,11 +361,13 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
 
     child.once("error", () => {
       activeLoginProcesses.delete(account.id);
+      activeLoginPrompts.delete(account.id);
       finish(baseStatus(account, "not_connected", "Codex device login process could not be started."));
     });
 
     child.once("close", (code) => {
       activeLoginProcesses.delete(account.id);
+      activeLoginPrompts.delete(account.id);
       if (settled) return;
       const clean = stripAnsi(captured).trim();
       const detail = clean
@@ -360,6 +378,7 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
 
     timer = setTimeout(() => {
       activeLoginProcesses.delete(account.id);
+      activeLoginPrompts.delete(account.id);
       finish(baseStatus(account, "not_connected", "Timed out waiting for Codex device authorization instructions."));
     }, LOGIN_PROMPT_TIMEOUT_MS);
     timer?.unref();
