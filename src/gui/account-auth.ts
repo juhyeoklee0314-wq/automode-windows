@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 
-import { prepareSpawn, which } from "../platform/command.js";
+import { prepareSpawn, prepareStdioSpawn, which } from "../platform/command.js";
 import type { AccountAuthStatus, AccountProfile } from "./types.js";
 
 const STATUS_TIMEOUT_MS = 12_000;
@@ -100,7 +100,7 @@ async function runStatus(command: string, account: AccountProfile): Promise<Stat
 }
 
 async function readCodexAccountIdentity(command: string, account: AccountProfile): Promise<CodexAccountIdentity | null> {
-  const prepared = prepareSpawn([command, "app-server", "--listen", "stdio://"]);
+  const prepared = prepareStdioSpawn(command, ["app-server", "--listen", "stdio://"]);
   return await new Promise<CodexAccountIdentity | null>((resolve) => {
     let child: ReturnType<typeof spawn> | undefined;
     let timer: NodeJS.Timeout | null = null;
