@@ -112,6 +112,44 @@ describe("multi-account scheduler reconciliation", () => {
     assert.equal(deleted.length, 1);
     assert.match(deleted[0] ?? "", /account-b/);
   });
+
+  it("keeps a stale task tracked when Windows refuses to delete it", () => {
+    const receipt = join(root, "schedule-delete-failure.json");
+    const accountA = {
+      id: "account-a", displayName: "A", enabled: true, message: "hi",
+      schedules: ["06:00"], agent: "codex" as const, catchupMinutes: 10,
+    };
+    const accountB = {
+      id: "account-b", displayName: "B", enabled: true, message: "hi",
+      schedules: ["07:00"], agent: "codex" as const, catchupMinutes: 20,
+    };
+    const installScheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", () => ({ ok: true, output: "Ready" }), receipt);
+    installScheduler.install([accountA, accountB]);
+
+    const failingScheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", (args) => {
+      if (args[0] === "/Delete" && String(args[2]).includes("account-b")) return { ok: false, output: "ACCESS_DENIED" };
+      return { ok: true, output: "Ready" };
+    }, receipt);
+    assert.throws(() => failingScheduler.prune([accountA]), /could not remove obsolete PingGPT tasks/);
+    const raw = JSON.parse(readFileSync(receipt, "utf8")) as { tasks: Array<{ name: string }> };
+    assert.ok(raw.tasks.some((task) => task.name.includes("account-b")));
+  });
+
+  it("routes each desired task with its exact account id", () => {
+    const receipt = join(root, "schedule-account-routing.json");
+    const actions: string[] = [];
+    const scheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", (args) => {
+      if (args[0] === "/Create") actions.push(String(args[args.indexOf("/TR") + 1]));
+      return { ok: true, output: "Ready" };
+    }, receipt);
+    scheduler.install([
+      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const },
+      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const },
+    ]);
+    assert.equal(actions.length, 2);
+    assert.match(actions[0] ?? "", /"profile-a"/);
+    assert.match(actions[1] ?? "", /"profile-a-long"/);
+  });
 });
 
 describe("multi-account GUI wiring", () => {
