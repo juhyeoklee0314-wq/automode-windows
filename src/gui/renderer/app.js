@@ -298,6 +298,9 @@ function applyAuthStatus(status) {
     el.classList.add("ok");
   } else if (status.state === "login_started") {
     el.textContent = "LOGIN STARTED";
+  } else if (status.state === "wrong_auth") {
+    el.textContent = "NOT CHATGPT AUTH";
+    el.classList.add("bad");
   } else if (status.state === "not_codex") {
     el.textContent = "NOT CODEX";
   } else if (status.state === "cli_missing") {
