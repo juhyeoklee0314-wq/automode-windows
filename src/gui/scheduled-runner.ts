@@ -20,6 +20,12 @@ export function accountPingEnvironment(account: AccountProfile): NodeJS.ProcessE
   return { CODEX_HOME: account.codexHome };
 }
 
+export function accountCatchupMinutes(account: AccountProfile, config: configmod.Config): number {
+  const candidate = Number(account.catchupMinutes);
+  if (Number.isFinite(candidate)) return Math.max(0, Math.min(180, Math.round(candidate)));
+  return Math.max(0, Math.min(180, Math.round(config.ping.catchup_minutes)));
+}
+
 export async function runScheduled(
   accountId: string,
   scheduleId: string,
@@ -49,8 +55,9 @@ export async function runScheduled(
   const wall = wallClockAt(now, timezone);
   const scheduledMinutes = parsed[0] * 60 + parsed[1];
   const elapsed = wall.hour * 60 + wall.minute - scheduledMinutes;
-  if (elapsed < 0 || elapsed > Math.max(0, config.ping.catchup_minutes)) {
-    log(`scheduled ping refused: outside catch-up window (${elapsed} minutes)`);
+  const catchupMinutes = accountCatchupMinutes(account, config);
+  if (elapsed < 0 || elapsed > catchupMinutes) {
+    log(`scheduled ping refused: outside catch-up window (${elapsed} minutes; account limit ${catchupMinutes})`);
     return 75;
   }
 
@@ -73,6 +80,7 @@ export async function runScheduled(
     trace?.emit("PING_07_PROFILE_SELECTED", "scheduled", {
       agent: account.agent,
       codexHomeMode: account.codexHome ? "account" : process.env.CODEX_HOME ? "inherited" : "default",
+      catchupMinutes,
     });
     const code = await reliablePing(account.agent, account.message, log, {
       env,
@@ -117,11 +125,13 @@ export async function runScheduledDryRun(
   const timezone = resolveTz(config.timezone || null);
   const wall = wallClockAt(now, timezone);
   const elapsed = wall.hour * 60 + wall.minute - (parsed[0] * 60 + parsed[1]);
+  const catchupMinutes = accountCatchupMinutes(account, config);
   const identity = `${account.id}-${dateKey(now, timezone)}-${scheduleId}`;
   const state = new State();
   trace?.emit("PING_DRY_04_GATES_OBSERVED", "dry_run", {
     leaseLive: leaseIsLive(now.getTime()),
-    catchupEligible: elapsed >= 0 && elapsed <= Math.max(0, config.ping.catchup_minutes),
+    catchupEligible: elapsed >= 0 && elapsed <= catchupMinutes,
+    catchupMinutes,
     alreadyCommitted: state.pingFired(identity),
     timezone,
   });
