@@ -9,7 +9,8 @@ import { acquireExecutionLock, clearLease, executionLockPath, leaseIsLive, STALE
 import { defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { reliablePing } from "../src/gui/reliable-ping.js";
 import { GUI_TASK_PREFIX, schedulerExecutable, WindowsScheduler } from "../src/gui/scheduler.js";
-import { accountPingEnvironment, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
+import { buildPingEnvironment } from "../src/agents/ping.js";
+import { accountPingEnvironment, accountPingUnsetEnvironment, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
 import { TRAY_ICON_RELATIVE_PATH, trayIconPath } from "../src/gui/tray-icon.js";
 import { DEFAULTS } from "../src/core/config.js";
@@ -241,7 +242,18 @@ describe("reliability safeguards", () => {
     assert.deepEqual(accountPingEnvironment({ ...base, agent: "codex", codexHome: "C:\\Profiles\\work" }), {
       CODEX_HOME: "C:\\Profiles\\work",
     });
+    assert.deepEqual(accountPingUnsetEnvironment({ ...base, agent: "codex", codexHome: "C:\\Profiles\\work" }), [
+      "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+    ]);
     assert.equal(accountPingEnvironment({ ...base, agent: "claude", codexHome: "C:\\Profiles\\work" }), undefined);
+    const childEnv = buildPingEnvironment(
+      { CODEX_HOME: "C:\\Profiles\\work", OPENAI_API_KEY: "temporary-value" },
+      ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+    );
+    assert.equal(childEnv.CODEX_HOME, "C:\\Profiles\\work");
+    assert.equal(childEnv.OPENAI_API_KEY, undefined);
+    assert.equal(childEnv.CODEX_API_KEY, undefined);
+    assert.equal(childEnv.CODEX_ACCESS_TOKEN, undefined);
     assert.equal(process.env.CODEX_HOME, "inherited-profile");
     if (inherited === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = inherited;
