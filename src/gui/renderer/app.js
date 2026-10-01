@@ -289,6 +289,10 @@ function applyAuthStatus(status) {
   const el = authStatusElement(status.accountId);
   if (!el) return;
   el.classList.remove("ok", "bad");
+  const card = [...$("account-list").querySelectorAll(".account-card")]
+    .find((entry) => entry.dataset.accountId === status.accountId);
+  const button = card?.querySelector(".connect-account");
+  if (button) button.textContent = status.state === "connected" ? "Reconnect" : "Connect";
   if (status.state === "connected") {
     el.textContent = "CONNECTED";
     el.classList.add("ok");
