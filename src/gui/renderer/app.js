@@ -342,9 +342,13 @@ function applyAuthStatus(status) {
       }
     }
   } else if (status.state === "login_started") {
-    el.textContent = "LOGIN STARTED";
+    el.textContent = "WAITING FOR LOGIN";
     if (identity) identity.textContent = "Actual ChatGPT account";
-    if (meta) meta.textContent = "Waiting for browser login to complete…";
+    if (meta) {
+      meta.textContent = status.loginCode
+        ? `Sign in as the intended account, then enter code ${status.loginCode}`
+        : "Waiting for device login to complete…";
+    }
   } else if (status.state === "wrong_auth") {
     el.textContent = "NOT CHATGPT AUTH";
     el.classList.add("bad");
@@ -399,8 +403,19 @@ async function connectAccount(card) {
     await saveChanges(false);
     const status = await window.automode.connectAccount(accountId);
     applyAuthStatus(status);
-    showBanner(status.detail, ["cli_missing", "not_connected", "profile_missing"].includes(status.state));
-    if (status.state === "login_started") pollAuthStatus(accountId);
+    showBanner(
+      status.state === "login_started" && status.loginCode
+        ? `Choose the intended ChatGPT account in the browser and enter code ${status.loginCode}.`
+        : status.detail,
+      ["cli_missing", "not_connected", "profile_missing"].includes(status.state),
+    );
+    if (status.state === "login_started") {
+      if (status.loginUrl) {
+        const opened = await window.automode.openExternalLogin(status.loginUrl);
+        if (!opened) showBanner("Could not open the Codex device login page.", true);
+      }
+      pollAuthStatus(accountId);
+    }
   } catch (error) {
     showBanner(`Could not start account login: ${error.message || error}`, true);
   } finally {
