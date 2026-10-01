@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { DEFAULTS } from "../src/core/config.js";
-import { classifyCodexLoginStatus, parseCodexAccountIdentity } from "../src/gui/account-auth.js";
+import { classifyCodexLoginStatus, parseCodexAccountIdentity, parseCodexDeviceLoginPrompt } from "../src/gui/account-auth.js";
 import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath } from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
@@ -37,6 +37,18 @@ describe("Codex account authentication classification", () => {
     assert.equal(classifyCodexLoginStatus("a", 0, "Logged in using an API key").state, "wrong_auth");
     assert.equal(classifyCodexLoginStatus("a", 0, "Logged in using workload identity").state, "wrong_auth");
     assert.equal(classifyCodexLoginStatus("a", 1, "Not logged in").state, "not_connected");
+  });
+
+  it("parses device-login instructions without depending on ANSI color codes", () => {
+    const output = [
+      "\u001b[94mhttps://auth.openai.com/codex/device\u001b[0m",
+      "Enter this one-time code (expires in 15 minutes)",
+      "   \u001b[94mABCD-EFGH\u001b[0m",
+    ].join("\n");
+    assert.deepEqual(parseCodexDeviceLoginPrompt(output), {
+      loginUrl: "https://auth.openai.com/codex/device",
+      loginCode: "ABCD-EFGH",
+    });
   });
 
   it("extracts only non-secret ChatGPT identity fields from account/read", () => {
@@ -84,6 +96,7 @@ describe("multi-account profile persistence", () => {
     assert.equal(loaded.accounts.length, 1);
     assert.equal(loaded.accounts[0]?.catchupMinutes, DEFAULTS.ping.catchup_minutes);
     assert.equal(loaded.accounts[0]?.wakePc, false);
+    assert.equal(loaded.accounts[0]?.codexHome, join(codexProfilesRoot(), "default"));
   });
 
   it("creates independent Codex homes and safe unique profile ids", () => {
@@ -215,9 +228,14 @@ describe("multi-account GUI wiring", () => {
     assert.match(preload, /automode:new-account-profile/);
     assert.match(preload, /automode:account-auth-status/);
     assert.match(preload, /automode:account-connect/);
+    assert.match(preload, /automode:open-external-login/);
     assert.match(main, /automode:new-account-profile/);
     assert.match(main, /automode:account-auth-status/);
     assert.match(main, /automode:account-connect/);
+    assert.match(main, /automode:open-external-login/);
+    assert.match(main, /auth\.openai\.com/);
+    assert.match(source("src/gui/account-auth.ts"), /login", "--device-auth"/);
+    assert.match(source("src/gui/renderer/app.js"), /enter code/);
   });
 
   it("keeps Start Menu integration while disabling the Desktop shortcut", () => {
