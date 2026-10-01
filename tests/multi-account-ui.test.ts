@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { DEFAULTS } from "../src/core/config.js";
-import { classifyCodexLoginStatus, parseCodexAccountIdentity, parseCodexDeviceLoginPrompt } from "../src/gui/account-auth.js";
+import { classifyCodexLoginStatus, deviceLoginPendingStatus, parseCodexAccountIdentity, parseCodexDeviceLoginPrompt } from "../src/gui/account-auth.js";
 import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath } from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
@@ -46,6 +46,19 @@ describe("Codex account authentication classification", () => {
       "   \u001b[94mABCD-EFGH\u001b[0m",
     ].join("\n");
     assert.deepEqual(parseCodexDeviceLoginPrompt(output), {
+      loginUrl: "https://auth.openai.com/codex/device",
+      loginCode: "ABCD-EFGH",
+    });
+  });
+
+  it("keeps the device code in pending auth status while the login process is alive", () => {
+    assert.deepEqual(deviceLoginPendingStatus("profile-a", {
+      loginUrl: "https://auth.openai.com/codex/device",
+      loginCode: "ABCD-EFGH",
+    }), {
+      accountId: "profile-a",
+      state: "login_started",
+      detail: "Device login is waiting for authorization.",
       loginUrl: "https://auth.openai.com/codex/device",
       loginCode: "ABCD-EFGH",
     });
