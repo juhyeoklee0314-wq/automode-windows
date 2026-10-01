@@ -58,7 +58,7 @@ export function newAccountProfile(config: Config, existing: AccountProfile[]): A
   return {
     id,
     displayName: `GPT Account ${existing.length + 1}`,
-    enabled: true,
+    enabled: false,
     codexHome: join(codexProfilesRoot(), id),
     message: config.ping.message,
     schedules: [...config.ping.times],
