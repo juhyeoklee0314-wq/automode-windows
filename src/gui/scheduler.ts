@@ -49,6 +49,18 @@ const safePart = (value: string): string => value.replace(/[^A-Za-z0-9_.-]/g, "_
 export const taskName = (accountId: string, scheduleId: string): string =>
   `${GUI_TASK_PREFIX} ${safePart(accountId)} ${safePart(scheduleId)}`;
 
+function desiredTasks(accounts: AccountProfile[]): SchedulerTaskStatus[] {
+  const desired: SchedulerTaskStatus[] = [];
+  for (const account of accounts.filter((entry) => entry.enabled)) {
+    account.schedules.forEach((time, index) => {
+      if (!parseHhmm(time)) return;
+      const scheduleId = `${time.replace(":", "")}-${index}`;
+      desired.push({ name: taskName(account.id, scheduleId), scheduleId, time, installed: false, enabled: false });
+    });
+  }
+  return desired;
+}
+
 /** electron-builder Portable exposes the stable launcher here; process.execPath is its temporary extraction. */
 export function schedulerExecutable(execPath: string, portableFile = process.env.PORTABLE_EXECUTABLE_FILE): string {
   return portableFile?.trim() || execPath;
@@ -68,15 +80,7 @@ export class WindowsScheduler {
 
   install(accounts: AccountProfile[]): SchedulerTaskStatus[] {
     const existing = readReceipt(this.receiptFile);
-    const desired: SchedulerTaskStatus[] = [];
-    for (const account of accounts.filter((entry) => entry.enabled)) {
-      account.schedules.forEach((time, index) => {
-        if (!parseHhmm(time)) return;
-        const scheduleId = `${time.replace(":", "")}-${index}`;
-        desired.push({ name: taskName(account.id, scheduleId), scheduleId, time, installed: false, enabled: false });
-      });
-    }
-
+    const desired = desiredTasks(accounts);
     const wanted = new Set(desired.map((task) => task.name));
     for (const old of existing.tasks.filter((task) => !wanted.has(task.name))) {
       this.runTask(["/Delete", "/TN", old.name, "/F"]);
@@ -97,6 +101,19 @@ export class WindowsScheduler {
     return created;
   }
 
+  /** Remove tasks for accounts/schedules that were deleted without enabling new work. */
+  prune(accounts: AccountProfile[]): SchedulerTaskStatus[] {
+    const receipt = readReceipt(this.receiptFile);
+    const wanted = new Set(desiredTasks(accounts).map((task) => task.name));
+    const kept: SchedulerTaskStatus[] = [];
+    for (const task of receipt.tasks) {
+      if (wanted.has(task.name)) kept.push(task);
+      else this.runTask(["/Delete", "/TN", task.name, "/F"]);
+    }
+    writeReceipt(kept, this.receiptFile);
+    return kept;
+  }
+
   setEnabled(enabled: boolean): SchedulerTaskStatus[] {
     const receipt = readReceipt(this.receiptFile);
     const tasks = receipt.tasks.map((task) => {
@@ -115,7 +132,6 @@ export class WindowsScheduler {
     });
   }
 
-  /** Read task identities for the asynchronous diagnostic collector without invoking schtasks. */
   diagnosticReceiptTasks(): SchedulerTaskStatus[] {
     return readDiagnosticReceipt(this.receiptFile).tasks;
   }
