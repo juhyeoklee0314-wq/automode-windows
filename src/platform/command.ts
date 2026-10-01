@@ -8,7 +8,7 @@
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { delimiter, dirname, extname, join, parse } from "node:path";
+import { delimiter, dirname, extname, join, parse, posix as posixPath, win32 as win32Path } from "node:path";
 
 export interface SpawnSpec {
   command: string;
@@ -192,13 +192,14 @@ export function codexNativeCandidates(
     return [command];
   }
 
+  const pathApi = platform === "win32" ? win32Path : posixPath;
   const roots: string[] = [];
-  let current = dirname(command);
-  const filesystemRoot = parse(current).root;
+  let current = pathApi.dirname(command);
+  const filesystemRoot = pathApi.parse(current).root;
   for (let depth = 0; depth < 5; depth += 1) {
     roots.push(current);
     if (current === filesystemRoot) break;
-    const parent = dirname(current);
+    const parent = pathApi.dirname(current);
     if (parent === current) break;
     current = parent;
   }
@@ -207,7 +208,7 @@ export function codexNativeCandidates(
   const seen = new Set<string>();
   for (const root of roots) {
     const candidates = [
-      join(
+      pathApi.join(
         root,
         "node_modules",
         "@openai",
@@ -217,7 +218,7 @@ export function codexNativeCandidates(
         "bin",
         target.executable,
       ),
-      join(
+      pathApi.join(
         root,
         "node_modules",
         "@openai",
@@ -230,7 +231,7 @@ export function codexNativeCandidates(
         "bin",
         target.executable,
       ),
-      join(
+      pathApi.join(
         root,
         "node_modules",
         "@openai",
