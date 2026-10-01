@@ -102,7 +102,8 @@ async function runStatus(command: string, account: AccountProfile): Promise<Stat
 async function readCodexAccountIdentity(command: string, account: AccountProfile): Promise<CodexAccountIdentity | null> {
   const prepared = prepareSpawn([command, "app-server", "--listen", "stdio://"]);
   return await new Promise<CodexAccountIdentity | null>((resolve) => {
-    let child;
+    let child: ReturnType<typeof spawn> | undefined;
+    let timer: NodeJS.Timeout | null = null;
     let settled = false;
     let stdoutBuffer = "";
     let captured = 0;
@@ -110,7 +111,7 @@ async function readCodexAccountIdentity(command: string, account: AccountProfile
     const finish = (identity: CodexAccountIdentity | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       try { child?.stdin?.end(); } catch { /* already closed */ }
       killTree(child?.pid);
       resolve(identity);
@@ -207,7 +208,7 @@ async function readCodexAccountIdentity(command: string, account: AccountProfile
       });
     });
 
-    const timer = setTimeout(() => finish(null), IDENTITY_TIMEOUT_MS);
+    timer = setTimeout(() => finish(null), IDENTITY_TIMEOUT_MS);
     timer.unref();
   });
 }
