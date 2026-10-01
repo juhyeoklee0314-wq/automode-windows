@@ -18,6 +18,9 @@ export interface AccountAuthStatus {
   accountId: string;
   state: AccountAuthState;
   detail: string;
+  email?: string | null;
+  planType?: string | null;
+  identityVerified?: boolean;
 }
 
 export interface GuiPreferences {
