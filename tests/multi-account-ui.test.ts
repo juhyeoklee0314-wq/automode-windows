@@ -43,7 +43,7 @@ describe("Codex account authentication classification", () => {
     const output = [
       "\u001b[94mhttps://auth.openai.com/codex/device\u001b[0m",
       "Enter this one-time code (expires in 15 minutes)",
-      "   \u001b[94mABCD-EFGH\u001b[0m",
+      "   \u001b[94mABCD-EFGHI\u001b[0m",
     ].join("\n");
     assert.deepEqual(parseCodexDeviceLoginPrompt(output), {
       loginUrl: "https://auth.openai.com/codex/device",
