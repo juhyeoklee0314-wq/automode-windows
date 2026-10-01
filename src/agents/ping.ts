@@ -33,7 +33,14 @@ export function headlessArgv(agent: string, message: string): string[] {
 /** Send one message to the agent, non-interactively. */
 export interface PingOnceOptions {
   env?: NodeJS.ProcessEnv;
+  unsetEnv?: string[];
   onResolved?: (path: string) => void;
+}
+
+export function buildPingEnvironment(overrides?: NodeJS.ProcessEnv, unset: string[] = []): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...(overrides ?? {}) };
+  for (const key of unset) delete env[key];
+  return env;
 }
 
 export async function pingOnce(agent: string, message: string, log?: Logger, options: PingOnceOptions = {}): Promise<number> {
@@ -45,12 +52,12 @@ export async function pingOnce(agent: string, message: string, log?: Logger, opt
   }
   options.onResolved?.(resolved);
   const spawn = prepareSpawn([resolved, ...args]);
-  return runPingProcess(spawn.command, spawn.args, agent, log, options.env);
+  return runPingProcess(spawn.command, spawn.args, agent, log, options.env, options.unsetEnv);
 }
 
-function runPingProcess(command: string, args: string[], agent: string, log?: Logger, env?: NodeJS.ProcessEnv): Promise<number> {
+function runPingProcess(command: string, args: string[], agent: string, log?: Logger, env?: NodeJS.ProcessEnv, unsetEnv: string[] = []): Promise<number> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: buildPingEnvironment(env, unsetEnv) });
     let settled = false;
     child.stdout?.resume();
     child.stderr?.resume();
