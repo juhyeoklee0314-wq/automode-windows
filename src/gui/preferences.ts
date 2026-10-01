@@ -47,7 +47,6 @@ export function defaults(config: Config): GuiPreferences {
       schedules: [...config.ping.times],
       agent: config.ping.agent === "codex" ? "codex" : "claude",
       catchupMinutes: clampCatchup(config.ping.catchup_minutes, 30),
-    wakePc: true,
       wakePc: false,
     }],
   };
@@ -66,6 +65,7 @@ export function newAccountProfile(config: Config, existing: AccountProfile[]): A
     schedules: [...config.ping.times],
     agent: "codex",
     catchupMinutes: clampCatchup(config.ping.catchup_minutes, 30),
+    wakePc: true,
   };
 }
 
