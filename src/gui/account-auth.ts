@@ -18,6 +18,23 @@ export interface CodexAccountIdentity {
   planType: string | null;
 }
 
+export interface CodexDeviceLoginPrompt {
+  loginUrl: string;
+  loginCode: string;
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+export function parseCodexDeviceLoginPrompt(output: string): CodexDeviceLoginPrompt | null {
+  const clean = stripAnsi(output);
+  const urlMatch = clean.match(/https:\/\/[^\s]+\/codex\/device\b/i);
+  const codeMatch = clean.match(/Enter this one-time code[\s\S]{0,240}?\n\s*([A-Z0-9-]{4,32})\b/i);
+  if (!urlMatch || !codeMatch) return null;
+  return { loginUrl: urlMatch[0], loginCode: codeMatch[1] };
+}
+
 function accountEnv(account: AccountProfile): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (account.codexHome) {
@@ -290,21 +307,15 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
       resolve(status);
     };
 
-    const stripAnsi = (value: string) =>
-      value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-
     const inspectPrompt = () => {
-      const clean = stripAnsi(captured);
-      const urlMatch = clean.match(/https:\/\/[^\s]+\/codex\/device\b/i);
-      const codeMatch = clean.match(/Enter this one-time code[\s\S]{0,240}?\n\s*([A-Z0-9-]{4,32})\b/i);
-
-      if (urlMatch && codeMatch) {
+      const prompt = parseCodexDeviceLoginPrompt(captured);
+      if (prompt) {
         return finish({
           accountId: account.id,
           state: "login_started",
           detail: "Device login is ready. Sign in as the intended ChatGPT account and enter the one-time code.",
-          loginUrl: urlMatch[0],
-          loginCode: codeMatch[1],
+          loginUrl: prompt.loginUrl,
+          loginCode: prompt.loginCode,
         }, true);
       }
     };
