@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { DEFAULTS } from "../src/core/config.js";
+import { classifyCodexLoginStatus } from "../src/gui/account-auth.js";
 import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath } from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
@@ -28,6 +29,15 @@ after(() => {
   if (oldLocal === undefined) delete process.env.LOCALAPPDATA;
   else process.env.LOCALAPPDATA = oldLocal;
   rmSync(root, { recursive: true, force: true });
+});
+
+describe("Codex account authentication classification", () => {
+  it("accepts only ChatGPT login mode for a ChatGPT profile", () => {
+    assert.equal(classifyCodexLoginStatus("a", 0, "Logged in using ChatGPT").state, "connected");
+    assert.equal(classifyCodexLoginStatus("a", 0, "Logged in using an API key").state, "wrong_auth");
+    assert.equal(classifyCodexLoginStatus("a", 0, "Logged in using workload identity").state, "wrong_auth");
+    assert.equal(classifyCodexLoginStatus("a", 1, "Not logged in").state, "not_connected");
+  });
 });
 
 describe("multi-account profile persistence", () => {
