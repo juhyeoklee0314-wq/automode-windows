@@ -7,6 +7,7 @@
  */
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { delimiter, dirname, extname, join, parse } from "node:path";
 
 export interface SpawnSpec {
@@ -221,6 +222,19 @@ export function codexNativeCandidates(
         "node_modules",
         "@openai",
         "codex",
+        "node_modules",
+        "@openai",
+        target.packageName,
+        "vendor",
+        target.triple,
+        "bin",
+        target.executable,
+      ),
+      join(
+        root,
+        "node_modules",
+        "@openai",
+        "codex",
         "vendor",
         target.triple,
         "bin",
@@ -242,6 +256,38 @@ export function codexNativeCandidates(
  * This avoids shell/shim process layers for long-lived stdio RPC sessions.
  */
 export function resolveCodexNativeExecutable(command: string): string | null {
+  const target = codexTarget();
+  if (!target) return null;
+
+  // Mirror the official @openai/codex launcher first: create a resolver rooted
+  // at @openai/codex and resolve the platform package's package.json.
+  let current = dirname(command);
+  const filesystemRoot = parse(current).root;
+  for (let depth = 0; depth < 5; depth += 1) {
+    const codexPackageJson = join(current, "node_modules", "@openai", "codex", "package.json");
+    if (existsSync(codexPackageJson)) {
+      try {
+        const requireFromCodex = createRequire(codexPackageJson);
+        const platformPackageJson = requireFromCodex.resolve(`@openai/${target.packageName}/package.json`);
+        const candidate = join(
+          dirname(platformPackageJson),
+          "vendor",
+          target.triple,
+          "bin",
+          target.executable,
+        );
+        if (runnable(candidate)) return candidate;
+      } catch {
+        // Fall through to deterministic filesystem candidates below.
+      }
+    }
+
+    if (current === filesystemRoot) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
   for (const candidate of codexNativeCandidates(command)) {
     if (runnable(candidate)) return candidate;
   }
