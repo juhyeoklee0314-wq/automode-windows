@@ -11,7 +11,7 @@ export interface AccountProfile {
   catchupMinutes?: number;
 }
 
-export type AccountAuthState = "connected" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
+export type AccountAuthState = "connected" | "wrong_auth" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
 
 export interface AccountAuthStatus {
   accountId: string;
