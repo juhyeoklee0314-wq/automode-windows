@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { DEFAULTS } from "../src/core/config.js";
-import { classifyCodexLoginStatus } from "../src/gui/account-auth.js";
+import { classifyCodexLoginStatus, parseCodexAccountIdentity } from "../src/gui/account-auth.js";
 import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath } from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
@@ -37,6 +37,29 @@ describe("Codex account authentication classification", () => {
     assert.equal(classifyCodexLoginStatus("a", 0, "Logged in using an API key").state, "wrong_auth");
     assert.equal(classifyCodexLoginStatus("a", 0, "Logged in using workload identity").state, "wrong_auth");
     assert.equal(classifyCodexLoginStatus("a", 1, "Not logged in").state, "not_connected");
+  });
+
+  it("extracts only non-secret ChatGPT identity fields from account/read", () => {
+    assert.deepEqual(
+      parseCodexAccountIdentity({
+        account: {
+          type: "chatgpt",
+          email: "person@example.com",
+          planType: "plus",
+          accessToken: "must-not-be-consumed",
+        },
+        requiresOpenaiAuth: true,
+      }),
+      { email: "person@example.com", planType: "plus" },
+    );
+    assert.deepEqual(
+      parseCodexAccountIdentity({
+        account: { type: "chatgpt", email: null, planType: "pro" },
+      }),
+      { email: null, planType: "pro" },
+    );
+    assert.equal(parseCodexAccountIdentity({ account: { type: "apiKey" } }), null);
+    assert.equal(parseCodexAccountIdentity({ account: null }), null);
   });
 });
 
@@ -182,6 +205,8 @@ describe("multi-account GUI wiring", () => {
     assert.match(app, /newAccountProfile\(\)/);
     assert.match(app, /readAccounts\(\)/);
     assert.match(app, /connectAccount\(accountId\)/);
+    assert.match(app, /account-auth-identity/);
+    assert.match(app, /Identity verified by Codex/);
   });
 
   it("wires account creation and login through sandboxed IPC", () => {
