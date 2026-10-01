@@ -1,0 +1,71 @@
+name: PingGPT Resource Hotfix V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pinggpt-multi-account-ui-001
+
+permissions:
+  contents: read
+
+jobs:
+  hotfix:
+    runs-on: windows-2025
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20.20.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+
+      - name: Install exact dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Test feature branch
+        shell: pwsh
+        run: npm test
+
+      - name: Stage resource-only hotfix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $PWD 'resource-hotfix-v2'
+          $distTarget = Join-Path $stage 'dist\src'
+          $rendererTarget = Join-Path $stage 'src\gui\renderer'
+          New-Item -ItemType Directory -Path $distTarget -Force | Out-Null
+          New-Item -ItemType Directory -Path $rendererTarget -Force | Out-Null
+
+          Get-ChildItem -LiteralPath 'dist\src' -Force |
+            Copy-Item -Destination $distTarget -Recurse -Force
+          Get-ChildItem -LiteralPath 'src\gui\renderer' -Force |
+            Copy-Item -Destination $rendererTarget -Recurse -Force
+
+          $manifest = Join-Path $stage 'PingGPT_ResourceHotfix_Manifest.txt'
+          "HEAD=$env:GITHUB_SHA" | Set-Content -LiteralPath $manifest -Encoding UTF8
+          "RESOURCE_ONLY=True" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          "EXECUTABLES_INCLUDED=False" | Add-Content -LiteralPath $manifest -Encoding UTF8
+
+          $files = @(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object {
+            $_.FullName -ne $manifest
+          } | Sort-Object FullName)
+
+          foreach ($file in $files) {
+            $relative = $file.FullName.Substring($stage.Length + 1).Replace('\\', '/')
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            "SHA256=$hash PATH=$relative" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          }
+
+      - name: Upload resource-only hotfix
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-multi-account-resource-hotfix-v2
+          path: resource-hotfix-v2/**
+          if-no-files-found: error
+          retention-days: 7
