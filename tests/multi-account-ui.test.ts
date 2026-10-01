@@ -242,13 +242,17 @@ describe("multi-account GUI wiring", () => {
     assert.match(preload, /automode:account-auth-status/);
     assert.match(preload, /automode:account-connect/);
     assert.match(preload, /automode:open-external-login/);
+    assert.match(preload, /url: string, code: string/);
     assert.match(main, /automode:new-account-profile/);
     assert.match(main, /automode:account-auth-status/);
     assert.match(main, /automode:account-connect/);
     assert.match(main, /automode:open-external-login/);
     assert.match(main, /auth\.openai\.com/);
+    assert.match(main, /clipboard\.writeText\(code\)/);
+    assert.match(main, /\^\[A-Z0-9\]\{4\}-\[A-Z0-9\]\{4\}\$/);
     assert.match(source("src/gui/account-auth.ts"), /login", "--device-auth"/);
-    assert.match(source("src/gui/renderer/app.js"), /enter code/);
+    assert.match(source("src/gui/renderer/app.js"), /Device code:/);
+    assert.match(source("src/gui/renderer/app.js"), /copied to clipboard/);
   });
 
   it("keeps Start Menu integration while disabling the Desktop shortcut", () => {
