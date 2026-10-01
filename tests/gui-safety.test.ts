@@ -15,6 +15,7 @@ import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
 import { TRAY_ICON_RELATIVE_PATH, trayIconPath } from "../src/gui/tray-icon.js";
 import { DEFAULTS } from "../src/core/config.js";
+import { commandCandidates } from "../src/platform/command.js";
 import { DIAGNOSTIC_LOG_PATH, DiagnosticTrace } from "../src/gui/diagnostics.js";
 import { resolveProcessMode } from "../src/gui/routing.js";
 
@@ -48,6 +49,27 @@ describe("power wake state", () => {
   it("handles catch-up across midnight without treating future schedules as due", () => {
     assert.equal(elapsedMinutesForSchedule(new Date("2026-10-02T00:05:00Z"), "UTC", "23:55"), 10);
     assert.equal(elapsedMinutesForSchedule(new Date("2026-10-02T16:00:00Z"), "UTC", "17:00"), 1380);
+  });
+});
+
+describe("Windows command resolution", () => {
+  it("never selects an extensionless npm shim on Windows", () => {
+    assert.deepEqual(
+      commandCandidates("C:\\npm\\codex", "win32", ".COM;.EXE;.BAT;.CMD"),
+      [
+        "C:\\npm\\codex.com",
+        "C:\\npm\\codex.exe",
+        "C:\\npm\\codex.bat",
+        "C:\\npm\\codex.cmd",
+      ],
+    );
+  });
+
+  it("leaves an already-qualified command untouched", () => {
+    assert.deepEqual(
+      commandCandidates("C:\\npm\\codex.cmd", "win32", ".COM;.EXE;.BAT;.CMD"),
+      ["C:\\npm\\codex.cmd"],
+    );
   });
 });
 
