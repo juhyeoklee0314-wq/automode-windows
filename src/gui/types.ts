@@ -9,6 +9,7 @@ export interface AccountProfile {
   schedules: string[];
   agent: "claude" | "codex";
   catchupMinutes?: number;
+  wakePc?: boolean;
 }
 
 export type AccountAuthState = "connected" | "wrong_auth" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
