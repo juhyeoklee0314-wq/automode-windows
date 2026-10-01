@@ -15,7 +15,7 @@ import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
 import { TRAY_ICON_RELATIVE_PATH, trayIconPath } from "../src/gui/tray-icon.js";
 import { DEFAULTS } from "../src/core/config.js";
-import { commandCandidates, prepareStdioSpawn } from "../src/platform/command.js";
+import { codexNativeCandidates, commandCandidates, prepareStdioSpawn } from "../src/platform/command.js";
 import { DIAGNOSTIC_LOG_PATH, DiagnosticTrace } from "../src/gui/diagnostics.js";
 import { resolveProcessMode } from "../src/gui/routing.js";
 
@@ -70,6 +70,20 @@ describe("Windows command resolution", () => {
       commandCandidates("C:\\npm\\codex.cmd", "win32", ".COM;.EXE;.BAT;.CMD"),
       ["C:\\npm\\codex.cmd"],
     );
+  });
+
+  it("derives the native Codex executable behind a global npm shim", () => {
+    const candidates = codexNativeCandidates(
+      "C:\\Users\\sapdo\\AppData\\Local\\Author Software\\nvm\\installs\\v20.20.2\\codex.cmd",
+      "win32",
+      "x64",
+    );
+    assert.equal(
+      candidates[0],
+      "C:\\Users\\sapdo\\AppData\\Local\\Author Software\\nvm\\installs\\v20.20.2\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+    );
+    assert.ok(candidates.some((entry) =>
+      entry.endsWith("\\node_modules\\@openai\\codex\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe")));
   });
 
   it("routes long-lived Windows cmd shims through cmd.exe so redirected stdin survives", () => {
