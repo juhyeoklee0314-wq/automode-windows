@@ -362,6 +362,6 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
       activeLoginProcesses.delete(account.id);
       finish(baseStatus(account, "not_connected", "Timed out waiting for Codex device authorization instructions."));
     }, LOGIN_PROMPT_TIMEOUT_MS);
-    timer.unref();
+    timer?.unref();
   });
 }
