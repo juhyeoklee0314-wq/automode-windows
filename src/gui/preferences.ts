@@ -43,6 +43,7 @@ export function defaults(config: Config): GuiPreferences {
       id: "default",
       displayName: "Default profile",
       enabled: true,
+      codexHome: join(codexProfilesRoot(), "default"),
       message: config.ping.message,
       schedules: [...config.ping.times],
       agent: config.ping.agent === "codex" ? "codex" : "claude",
@@ -75,7 +76,12 @@ function projectPreferences(raw: Partial<GuiPreferences>, config: Config): GuiPr
   const seen = new Set<string>();
   const accounts = source.map((account, index) => {
     const id = normalizedId(account.id, index, seen);
-    const codexHome = account.codexHome ? String(account.codexHome) : undefined;
+    // Every profile gets its own Codex home. Legacy/default profiles that
+    // omitted codexHome are projected into an isolated profile instead of
+    // inheriting the machine-wide Codex/ChatGPT login.
+    const codexHome = account.codexHome
+      ? String(account.codexHome)
+      : join(codexProfilesRoot(), id);
     return {
       id,
       displayName: String(account.displayName || (index === 0 ? "Default profile" : `Profile ${index + 1}`)),
