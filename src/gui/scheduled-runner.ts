@@ -20,6 +20,11 @@ export function accountPingEnvironment(account: AccountProfile): NodeJS.ProcessE
   return { CODEX_HOME: account.codexHome };
 }
 
+export function accountPingUnsetEnvironment(account: AccountProfile): string[] {
+  if (account.agent !== "codex" || !account.codexHome) return [];
+  return ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"];
+}
+
 export function accountCatchupMinutes(account: AccountProfile, config: configmod.Config): number {
   const candidate = Number(account.catchupMinutes);
   if (Number.isFinite(candidate)) return Math.max(0, Math.min(180, Math.round(candidate)));
@@ -77,6 +82,7 @@ export async function runScheduled(
   try {
     if (state.pingFired(identity)) return 0;
     const env = accountPingEnvironment(account);
+    const unsetEnv = accountPingUnsetEnvironment(account);
     trace?.emit("PING_07_PROFILE_SELECTED", "scheduled", {
       agent: account.agent,
       codexHomeMode: account.codexHome ? "account" : process.env.CODEX_HOME ? "inherited" : "default",
@@ -84,6 +90,7 @@ export async function runScheduled(
     });
     const code = await reliablePing(account.agent, account.message, log, {
       env,
+      unsetEnv,
       onResolved: (path) => trace?.emit("PING_08_EXECUTABLE_RESOLVED", "scheduled", { agent: account.agent, path }),
     });
     if (code === 0) {
