@@ -10,7 +10,8 @@ import { defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, 
 import { reliablePing } from "../src/gui/reliable-ping.js";
 import { GUI_TASK_PREFIX, schedulerExecutable, WindowsScheduler } from "../src/gui/scheduler.js";
 import { buildPingEnvironment } from "../src/agents/ping.js";
-import { accountPingEnvironment, accountPingUnsetEnvironment, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
+import { accountPingEnvironment, accountPingUnsetEnvironment, elapsedMinutesForSchedule, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
+import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/gui/power-state.js";
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
 import { TRAY_ICON_RELATIVE_PATH, trayIconPath } from "../src/gui/tray-icon.js";
 import { DEFAULTS } from "../src/core/config.js";
@@ -32,6 +33,22 @@ after(() => {
   if (oldConfig === undefined) delete process.env.XDG_CONFIG_HOME;
   else process.env.XDG_CONFIG_HOME = oldConfig;
   rmSync(root, { recursive: true, force: true });
+});
+
+describe("power wake state", () => {
+  it("correlates a resume only after a recorded suspend", () => {
+    const base = Date.now();
+    recordSuspend(base, process.pid);
+    assert.equal(recentlyResumedFromSuspend(base + 1_000), false);
+    recordResume(base + 2_000, process.pid);
+    assert.equal(recentlyResumedFromSuspend(base + 3_000), true);
+    assert.equal(recentlyResumedFromSuspend(base + 400_000), false);
+  });
+
+  it("handles catch-up across midnight without treating future schedules as due", () => {
+    assert.equal(elapsedMinutesForSchedule(new Date("2026-10-02T00:05:00Z"), "UTC", "23:55"), 10);
+    assert.equal(elapsedMinutesForSchedule(new Date("2026-10-02T16:00:00Z"), "UTC", "17:00"), 1380);
+  });
 });
 
 describe("GUI lifecycle lease", () => {
