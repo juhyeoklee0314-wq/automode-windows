@@ -14,6 +14,7 @@ const api: AutomodeApi = Object.freeze({
   newAccountProfile: () => ipcRenderer.invoke("automode:new-account-profile"),
   getAccountAuthStatus: (accountId: string) => ipcRenderer.invoke("automode:account-auth-status", accountId),
   connectAccount: (accountId: string) => ipcRenderer.invoke("automode:account-connect", accountId),
+  openExternalLogin: (url: string) => ipcRenderer.invoke("automode:open-external-login", url),
   doctor: () => ipcRenderer.invoke("automode:doctor"),
   readLog: () => ipcRenderer.invoke("automode:read-log"),
   openLogFolder: () => ipcRenderer.invoke("automode:open-log-folder"),
