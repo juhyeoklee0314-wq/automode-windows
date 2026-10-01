@@ -24,8 +24,7 @@ function runnable(path: string): boolean {
   }
 }
 
-function windowsExtensions(): string[] {
-  const raw = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD";
+function windowsExtensions(raw = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD"): string[] {
   return raw
     .split(";")
     .map((ext) => ext.trim())
@@ -33,16 +32,33 @@ function windowsExtensions(): string[] {
     .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
 }
 
-function candidates(path: string): string[] {
-  if (process.platform !== "win32" || extname(path)) return [path];
-  return [path, ...windowsExtensions().map((ext) => path + ext.toLowerCase()), ...windowsExtensions().map((ext) => path + ext.toUpperCase())];
+export function commandCandidates(
+  path: string,
+  platform = process.platform,
+  pathext = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD",
+): string[] {
+  if (platform !== "win32" || extname(path)) return [path];
+
+  // Windows CreateProcess cannot directly execute npm's extensionless POSIX
+  // shim. Resolve only PATHEXT-backed files such as codex.cmd/codex.exe.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ext of windowsExtensions(pathext)) {
+    for (const candidate of [path + ext.toLowerCase(), path + ext.toUpperCase()]) {
+      const key = candidate.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+    }
+  }
+  return out;
 }
 
 /** Where a command lives, or null, without spawning a shell. */
 export function which(command: string): string | null {
   const hasSeparator = command.includes("/") || command.includes("\\");
   if (hasSeparator) {
-    for (const candidate of candidates(command)) {
+    for (const candidate of commandCandidates(command)) {
       if (runnable(candidate)) return candidate;
     }
     return null;
@@ -50,7 +66,7 @@ export function which(command: string): string | null {
 
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    for (const candidate of candidates(join(dir, command))) {
+    for (const candidate of commandCandidates(join(dir, command))) {
       if (runnable(candidate)) return candidate;
     }
   }
@@ -83,12 +99,24 @@ export function prepareSpawn(argv: string[]): SpawnSpec {
   const [command, ...args] = argv;
   if (!command) throw new Error("empty command");
 
-  if (process.platform !== "win32" || !/\.(?:cmd|bat)$/i.test(command)) {
+  if (process.platform !== "win32") {
+    return { command, args };
+  }
+
+  const powershell = powershellForShim();
+  if (/\.ps1$/i.test(command)) {
+    if (!powershell) return { command, args };
+    return {
+      command: powershell,
+      args: ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", command, ...args],
+    };
+  }
+
+  if (!/\.(?:cmd|bat)$/i.test(command)) {
     return { command, args };
   }
 
   const ps1 = command.replace(/\.(?:cmd|bat)$/i, ".ps1");
-  const powershell = powershellForShim();
   if (powershell && existsSync(ps1)) {
     return {
       command: powershell,
