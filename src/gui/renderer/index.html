@@ -33,8 +33,8 @@
       </section>
 
       <section class="page" id="page-automation">
-        <article class="card accent-card"><div class="card-title"><div><h3>Auto Ping</h3><p>Keep usage windows aligned without opening a terminal.</p></div><label class="switch"><input id="auto-ping" type="checkbox"><span></span></label></div><div class="row"><label>Agent<select id="ping-agent"><option value="claude">Claude</option><option value="codex">Codex</option></select></label><label>Catch-up window (minutes)<input id="catchup" type="number" min="0" max="180"></label></div><label>Ping message<textarea id="ping-message" maxlength="2000" rows="3"></textarea></label></article>
-        <article class="card"><div class="card-title"><div><h3>Ping times</h3><p>Daily times in the configured timezone.</p></div><button class="secondary small" id="add-time">+ Add time</button></div><div id="times" class="times"></div></article>
+        <article class="card accent-card"><div class="card-title"><div><h3>Auto Ping</h3><p>Enable or disable all PingGPT-managed account schedules. Each account below keeps its own agent, login profile, message, catch-up window, and ping times.</p></div><label class="switch"><input id="auto-ping" type="checkbox"><span></span></label></div></article>
+        <article class="card"><div class="card-title"><div><h3>Ping accounts</h3><p>Add as many target accounts as needed. New Codex profiles use isolated CODEX_HOME folders so ChatGPT logins do not overwrite each other.</p></div><button class="secondary small" id="add-account">+ Add account</button></div><div id="account-list" class="account-list"></div><p class="muted account-note">Deleting a profile removes its PingGPT schedule after Save. Its Codex login folder is intentionally left on disk.</p></article>
         <article class="card"><div class="card-title"><div><h3>Scheduler state</h3><p>Only PingGPT-managed GUI tasks are managed. Existing CLI tasks are untouched.</p></div></div><div id="task-list" class="task-list"></div><p class="path" id="config-path"></p></article>
       </section>
 
