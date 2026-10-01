@@ -82,24 +82,40 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
   return classifyCodexLoginStatus(account.id, result.code, result.output);
 }
 
-export function startCodexLogin(account: AccountProfile): AccountAuthStatus {
+export async function startCodexLogin(account: AccountProfile): Promise<AccountAuthStatus> {
   if (account.agent !== "codex") {
     return baseStatus(account, "not_codex", "Switch this profile to Codex before connecting a ChatGPT account.");
   }
   const resolved = which("codex");
   if (!resolved) return baseStatus(account, "cli_missing", "Codex CLI was not found on PATH.");
   if (account.codexHome) mkdirSync(account.codexHome, { recursive: true });
-  try {
-    const prepared = prepareSpawn([resolved, "login"]);
-    const child = spawn(prepared.command, prepared.args, {
-      detached: true,
-      windowsHide: true,
-      env: accountEnv(account),
-      stdio: "ignore",
+  const prepared = prepareSpawn([resolved, "login"]);
+  return await new Promise<AccountAuthStatus>((resolve) => {
+    let settled = false;
+    const finish = (status: AccountAuthStatus) => {
+      if (settled) return;
+      settled = true;
+      resolve(status);
+    };
+
+    let child;
+    try {
+      child = spawn(prepared.command, prepared.args, {
+        detached: true,
+        windowsHide: true,
+        env: accountEnv(account),
+        stdio: "ignore",
+      });
+    } catch {
+      return finish(baseStatus(account, "not_connected", "Codex login could not be started."));
+    }
+
+    child.once("error", () => {
+      finish(baseStatus(account, "not_connected", "Codex login process could not be started."));
     });
-    child.unref();
-    return baseStatus(account, "login_started", "Codex login started. Complete the account selection in your browser.");
-  } catch {
-    return baseStatus(account, "not_connected", "Codex login could not be started.");
-  }
+    child.once("spawn", () => {
+      child.unref();
+      finish(baseStatus(account, "login_started", "Codex login started. Complete the account selection in your browser."));
+    });
+  });
 }
