@@ -7,7 +7,7 @@
  */
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
-import { delimiter, extname, join } from "node:path";
+import { delimiter, dirname, extname, join, parse } from "node:path";
 
 export interface SpawnSpec {
   command: string;
@@ -151,4 +151,99 @@ export function prepareStdioSpawn(command: string, args: string[]): SpawnSpec {
     command: comspec,
     args: ["/d", "/s", "/c", inner],
   };
+}
+
+
+function codexTarget(platform = process.platform, arch = process.arch): { packageName: string; triple: string; executable: string } | null {
+  if (platform === "win32" && arch === "x64") {
+    return { packageName: "codex-win32-x64", triple: "x86_64-pc-windows-msvc", executable: "codex.exe" };
+  }
+  if (platform === "win32" && arch === "arm64") {
+    return { packageName: "codex-win32-arm64", triple: "aarch64-pc-windows-msvc", executable: "codex.exe" };
+  }
+  if (platform === "darwin" && arch === "x64") {
+    return { packageName: "codex-darwin-x64", triple: "x86_64-apple-darwin", executable: "codex" };
+  }
+  if (platform === "darwin" && arch === "arm64") {
+    return { packageName: "codex-darwin-arm64", triple: "aarch64-apple-darwin", executable: "codex" };
+  }
+  if ((platform === "linux" || platform === "android") && arch === "x64") {
+    return { packageName: "codex-linux-x64", triple: "x86_64-unknown-linux-musl", executable: "codex" };
+  }
+  if ((platform === "linux" || platform === "android") && arch === "arm64") {
+    return { packageName: "codex-linux-arm64", triple: "aarch64-unknown-linux-musl", executable: "codex" };
+  }
+  return null;
+}
+
+export function codexNativeCandidates(
+  command: string,
+  platform = process.platform,
+  arch = process.arch,
+): string[] {
+  const target = codexTarget(platform, arch);
+  if (!target) return [];
+
+  if (
+    (platform === "win32" && /codex\.exe$/i.test(command)) ||
+    (platform !== "win32" && /(?:^|[\\/])codex$/.test(command))
+  ) {
+    return [command];
+  }
+
+  const roots: string[] = [];
+  let current = dirname(command);
+  const filesystemRoot = parse(current).root;
+  for (let depth = 0; depth < 5; depth += 1) {
+    roots.push(current);
+    if (current === filesystemRoot) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const root of roots) {
+    const candidates = [
+      join(
+        root,
+        "node_modules",
+        "@openai",
+        target.packageName,
+        "vendor",
+        target.triple,
+        "bin",
+        target.executable,
+      ),
+      join(
+        root,
+        "node_modules",
+        "@openai",
+        "codex",
+        "vendor",
+        target.triple,
+        "bin",
+        target.executable,
+      ),
+    ];
+    for (const candidate of candidates) {
+      const key = platform === "win32" ? candidate.toLowerCase() : candidate;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve the native Codex binary behind the npm launcher when available.
+ * This avoids shell/shim process layers for long-lived stdio RPC sessions.
+ */
+export function resolveCodexNativeExecutable(command: string): string | null {
+  for (const candidate of codexNativeCandidates(command)) {
+    if (runnable(candidate)) return candidate;
+  }
+  return null;
 }
