@@ -139,7 +139,26 @@ function accountCard(account, saved = true) {
   catchupInput.value = String(account.catchupMinutes ?? snapshot?.config?.ping?.catchup_minutes ?? 30);
   catchupLabel.append(catchupInput);
 
-  grid.append(agentLabel, catchupLabel);
+  const wakeLabel = document.createElement("label");
+  wakeLabel.textContent = "Sleep / lid-closed behavior";
+  const wakeWrap = document.createElement("div");
+  wakeWrap.className = "account-enable";
+  wakeWrap.style.paddingBottom = "0";
+  const wakeText = document.createElement("span");
+  wakeText.textContent = "Wake on AC, then return to sleep";
+  const wakeSwitch = document.createElement("label");
+  wakeSwitch.className = "switch";
+  wakeSwitch.style.margin = "0";
+  const wakeInput = document.createElement("input");
+  wakeInput.className = "account-wake";
+  wakeInput.type = "checkbox";
+  wakeInput.checked = account.wakePc === true;
+  const wakeSlider = document.createElement("span");
+  wakeSwitch.append(wakeInput, wakeSlider);
+  wakeWrap.append(wakeText, wakeSwitch);
+  wakeLabel.append(wakeWrap);
+
+  grid.append(agentLabel, catchupLabel, wakeLabel);
 
   const auth = document.createElement("div");
   auth.className = "account-auth";
@@ -251,6 +270,7 @@ function readAccounts() {
       schedules,
       agent: card.querySelector(".account-agent").value,
       catchupMinutes: clampNumber(card.querySelector(".account-catchup").value, 0, 180, 30),
+      wakePc: card.querySelector(".account-wake").checked,
     };
   });
 }
