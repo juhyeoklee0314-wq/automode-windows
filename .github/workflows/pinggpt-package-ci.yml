@@ -1,0 +1,239 @@
+name: PingGPT Windows Packaging Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pinggpt-ci-package-diagnostic-001
+
+permissions:
+  contents: read
+
+jobs:
+  package-diagnostic:
+    name: Windows 2025 / Node 20.20.2 / unsigned diagnostic
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    env:
+      PINGGPT_BUILD_IDENTITY: phase7-pinggpt-diagnostic-20260930-005
+      PINGGPT_BASELINE_PARENT: 6f36b09b90f7cb88e8b046c2795a7c5f9b7f9c81
+
+    steps:
+      - name: Checkout dispatched revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify approved source lineage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $head = (git rev-parse HEAD).Trim()
+          $parent = (git rev-parse HEAD^).Trim()
+
+          Write-Host "Workflow commit: $head"
+          Write-Host "Expected baseline parent: $env:PINGGPT_BASELINE_PARENT"
+          Write-Host "Actual parent:            $parent"
+
+          if ($parent -ne $env:PINGGPT_BASELINE_PARENT) {
+            throw "Workflow commit is not an immediate child of the approved _005 baseline."
+          }
+
+          $changed = @(
+            git diff --name-only $env:PINGGPT_BASELINE_PARENT $head
+          )
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to compare workflow commit with approved baseline."
+          }
+
+          if (
+            $changed.Count -ne 1 -or
+            $changed[0] -ne '.github/workflows/pinggpt-package-ci.yml'
+          ) {
+            $changed | ForEach-Object { Write-Host $_ }
+            throw "Unexpected source change exists above the approved _005 baseline."
+          }
+
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+
+          if ($status.Count -ne 0) {
+            $status | ForEach-Object { Write-Host $_ }
+            throw "Fresh CI checkout is not clean."
+          }
+
+      - name: Set up Node 20.20.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+
+      - name: Print tool identity
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          Write-Host "Runner OS: $env:RUNNER_OS"
+          Write-Host "Runner arch: $env:RUNNER_ARCH"
+          Write-Host "Build identity: $env:PINGGPT_BUILD_IDENTITY"
+
+      - name: Install exact lockfile dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Verify locked packaging toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $eb = node -p "require('./node_modules/electron-builder/package.json').version"
+          $abl = node -p "require('./node_modules/app-builder-lib/package.json').version"
+          $electron = node -p "require('./node_modules/electron/package.json').version"
+          $pty = node -p "require('./node_modules/node-pty/package.json').version"
+
+          Write-Host "electron-builder=$eb"
+          Write-Host "app-builder-lib=$abl"
+          Write-Host "electron=$electron"
+          Write-Host "node-pty=$pty"
+
+          if ($eb -ne '26.15.3') { throw "Unexpected electron-builder version: $eb" }
+          if ($abl -ne '26.15.3') { throw "Unexpected app-builder-lib version: $abl" }
+          if ($electron -ne '37.10.3') { throw "Unexpected Electron version: $electron" }
+          if ($pty -ne '1.1.0') { throw "Unexpected node-pty version: $pty" }
+
+      - name: Accepted source test gate
+        shell: pwsh
+        run: npm test
+
+      - name: Assert tracked source remains clean
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $diff = @(git status --porcelain=v1 --untracked-files=no)
+
+          if ($diff.Count -ne 0) {
+            $diff | ForEach-Object { Write-Host $_ }
+            throw "Tracked source changed during install/test."
+          }
+
+      - name: Package win-unpacked diagnostic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          npx electron-builder `
+            --win dir `
+            --x64 `
+            --config.directories.output=release-ci-dir
+
+      - name: Package Portable diagnostic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          npx electron-builder `
+            --win portable `
+            --x64 `
+            --config.directories.output=release-ci-portable
+
+      - name: Package NSIS diagnostic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          npx electron-builder `
+            --win nsis `
+            --x64 `
+            --config.directories.output=release-ci-nsis
+
+      - name: Generate candidate identity manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $roots = @(
+            'release-ci-dir',
+            'release-ci-portable',
+            'release-ci-nsis'
+          )
+
+          $rows = New-Object System.Collections.Generic.List[string]
+          [void]$rows.Add("PATH`tSIZE`tSHA256`tAUTHENTICODE_STATUS`tSIGNER")
+
+          foreach ($root in $roots) {
+            if (-not (Test-Path -LiteralPath $root)) {
+              throw "Expected output missing: $root"
+            }
+
+            foreach ($f in Get-ChildItem -LiteralPath $root -Recurse -File) {
+              $rel = $f.FullName.Substring($PWD.Path.Length + 1)
+              $sha = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+
+              $authStatus = ''
+              $signer = ''
+
+              if ($f.Extension -ieq '.exe') {
+                $sig = Get-AuthenticodeSignature -LiteralPath $f.FullName
+                $authStatus = [string]$sig.Status
+
+                if ($null -ne $sig.SignerCertificate) {
+                  $signer = [string]$sig.SignerCertificate.Subject
+                }
+              }
+
+              [void]$rows.Add(
+                "$rel`t$($f.Length)`t$sha`t$authStatus`t$signer"
+              )
+            }
+          }
+
+          $rows | Set-Content `
+            -LiteralPath 'PingGPT_CI_Packaging_Manifest.tsv' `
+            -Encoding UTF8
+
+      - name: Verify source still unchanged after packaging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $tracked = @(git status --porcelain=v1 --untracked-files=no)
+
+          if ($tracked.Count -ne 0) {
+            $tracked | ForEach-Object { Write-Host $_ }
+            throw "Tracked repository content changed during packaging."
+          }
+
+      - name: Upload packaging manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-ci-packaging-manifest
+          path: PingGPT_CI_Packaging_Manifest.tsv
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload win-unpacked candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-win-unpacked-unsigned-diagnostic
+          path: release-ci-dir/win-unpacked/**
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Portable candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-portable-unsigned-diagnostic
+          path: release-ci-portable/**
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload NSIS candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-nsis-unsigned-diagnostic
+          path: release-ci-nsis/**
+          if-no-files-found: error
+          retention-days: 7
