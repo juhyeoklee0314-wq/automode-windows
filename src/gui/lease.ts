@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, closeSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, closeSync } from "node:fs";
 import { join } from "node:path";
 
 import { stateDir } from "../core/config.js";
@@ -54,6 +54,25 @@ export function leaseIsLive(now = Date.now()): boolean {
     return lease.armed === true && lease.expiresAt >= now && now - lease.updatedAt <= LEASE_TTL_MS && pidAlive(lease.ownerPid);
   } catch {
     return false;
+  }
+}
+
+export function activeExecutionLockCount(namespace = "production"): number {
+  const directory = join(stateDir(), "locks", namespace.replace(/[^A-Za-z0-9_.-]/g, "_"));
+  try {
+    let count = 0;
+    for (const name of readdirSync(directory)) {
+      if (!name.endsWith(".lock")) continue;
+      try {
+        const record = JSON.parse(readFileSync(join(directory, name), "utf8")) as { ownerPid?: unknown };
+        if (pidAlive(Number(record.ownerPid))) count += 1;
+      } catch {
+        // Ignore unreadable or already-removed lock files.
+      }
+    }
+    return count;
+  } catch {
+    return 0;
   }
 }
 
