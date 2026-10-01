@@ -343,10 +343,14 @@ function applyAuthStatus(status) {
     }
   } else if (status.state === "login_started") {
     el.textContent = "WAITING FOR LOGIN";
-    if (identity) identity.textContent = "Actual ChatGPT account";
+    if (identity) {
+      identity.textContent = status.loginCode
+        ? `Device code: ${status.loginCode}`
+        : "Actual ChatGPT account";
+    }
     if (meta) {
       meta.textContent = status.loginCode
-        ? `Sign in as the intended account, then enter code ${status.loginCode}`
+        ? "Code copied to clipboard. Paste it into the browser page."
         : "Waiting for device login to complete…";
     }
   } else if (status.state === "wrong_auth") {
@@ -410,9 +414,13 @@ async function connectAccount(card) {
       ["cli_missing", "not_connected", "profile_missing"].includes(status.state),
     );
     if (status.state === "login_started") {
-      if (status.loginUrl) {
-        const opened = await window.automode.openExternalLogin(status.loginUrl);
-        if (!opened) showBanner("Could not open the Codex device login page.", true);
+      if (status.loginUrl && status.loginCode) {
+        const opened = await window.automode.openExternalLogin(status.loginUrl, status.loginCode);
+        if (opened) {
+          showBanner(`Device code ${status.loginCode} copied to clipboard. Paste it into the browser.`);
+        } else {
+          showBanner("Could not open the Codex device login page or copy its code.", true);
+        }
       }
       pollAuthStatus(accountId);
     }
