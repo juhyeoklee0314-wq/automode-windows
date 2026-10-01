@@ -10,6 +10,7 @@ export interface ReliablePingOptions {
   waitForNetwork?: () => Promise<boolean>;
   ping?: (agent: string, message: string, log?: Logger) => Promise<number>;
   env?: NodeJS.ProcessEnv;
+  unsetEnv?: string[];
   onResolved?: (path: string) => void;
 }
 
@@ -35,7 +36,7 @@ export async function reliablePing(
   const retryDelayMs = Math.max(0, options.retryDelayMs ?? 4_000);
   const ready = options.waitForNetwork ?? (() => defaultNetworkReady(options.networkTimeoutMs ?? 10_000));
   const send = options.ping ?? ((selectedAgent, selectedMessage, selectedLog) =>
-    pingOnce(selectedAgent, selectedMessage, selectedLog, { env: options.env, onResolved: options.onResolved }));
+    pingOnce(selectedAgent, selectedMessage, selectedLog, { env: options.env, unsetEnv: options.unsetEnv, onResolved: options.onResolved }));
 
   if (!(await ready())) {
     log?.("ping: network did not become ready within the bounded wait");
