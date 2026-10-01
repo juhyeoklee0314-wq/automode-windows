@@ -127,6 +127,7 @@ jobs:
           npx electron-builder `
             --win dir `
             --x64 `
+            --publish never `
             --config.directories.output=release-ci-dir
 
       - name: Package Portable diagnostic
@@ -137,6 +138,7 @@ jobs:
           npx electron-builder `
             --win portable `
             --x64 `
+            --publish never `
             --config.directories.output=release-ci-portable
 
       - name: Package NSIS diagnostic
@@ -147,6 +149,7 @@ jobs:
           npx electron-builder `
             --win nsis `
             --x64 `
+            --publish never `
             --config.directories.output=release-ci-nsis
 
       - name: Generate candidate identity manifest
