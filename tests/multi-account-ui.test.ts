@@ -56,6 +56,7 @@ describe("multi-account profile persistence", () => {
     const first = newAccountProfile(DEFAULTS, []);
     const second = newAccountProfile(DEFAULTS, [first]);
     assert.equal(first.agent, "codex");
+    assert.equal(first.enabled, false);
     assert.notEqual(first.id, second.id);
     assert.match(first.id, /^profile-[A-Za-z0-9_.-]+$/);
     assert.ok(first.codexHome?.startsWith(codexProfilesRoot()));
