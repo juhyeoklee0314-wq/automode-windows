@@ -23,9 +23,23 @@ function killTree(pid: number | undefined): void {
   }
 }
 
-async function runStatus(command: string, account: AccountProfile): Promise<number> {
+interface StatusResult { code: number; output: string }
+
+export function classifyCodexLoginStatus(accountId: string, code: number, output: string): AccountAuthStatus {
+  if (code !== 0) return { accountId, state: "not_connected", detail: "This profile is not connected to ChatGPT." };
+  if (/Logged in using ChatGPT/i.test(output)) {
+    return { accountId, state: "connected", detail: "ChatGPT login is active for this profile." };
+  }
+  return {
+    accountId,
+    state: "wrong_auth",
+    detail: "Codex is authenticated, but not with ChatGPT. Reconnect this profile using ChatGPT.",
+  };
+}
+
+async function runStatus(command: string, account: AccountProfile): Promise<StatusResult> {
   const prepared = prepareSpawn([command, "login", "status"]);
-  return await new Promise<number>((resolve) => {
+  return await new Promise<StatusResult>((resolve) => {
     const child = spawn(prepared.command, prepared.args, {
       windowsHide: true,
       env: accountEnv(account),
@@ -33,9 +47,11 @@ async function runStatus(command: string, account: AccountProfile): Promise<numb
     });
     let settled = false;
     let captured = 0;
+    let output = "";
     const consume = (chunk: Buffer) => {
       captured += chunk.length;
-      if (captured > MAX_CAPTURE) killTree(child.pid);
+      if (captured <= MAX_CAPTURE) output += chunk.toString("utf8");
+      else killTree(child.pid);
     };
     child.stdout?.on("data", consume);
     child.stderr?.on("data", consume);
@@ -43,7 +59,7 @@ async function runStatus(command: string, account: AccountProfile): Promise<numb
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(code);
+      resolve({ code, output });
     };
     const timer = setTimeout(() => {
       killTree(child.pid);
@@ -62,10 +78,8 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
   }
   const resolved = which("codex");
   if (!resolved) return baseStatus(account, "cli_missing", "Codex CLI was not found on PATH.");
-  const code = await runStatus(resolved, account);
-  return code === 0
-    ? baseStatus(account, "connected", "ChatGPT login is active for this profile.")
-    : baseStatus(account, "not_connected", "This profile is not connected to ChatGPT.");
+  const result = await runStatus(resolved, account);
+  return classifyCodexLoginStatus(account.id, result.code, result.output);
 }
 
 export function startCodexLogin(account: AccountProfile): AccountAuthStatus {
