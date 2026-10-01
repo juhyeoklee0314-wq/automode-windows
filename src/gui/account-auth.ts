@@ -6,7 +6,10 @@ import type { AccountAuthStatus, AccountProfile } from "./types.js";
 
 const STATUS_TIMEOUT_MS = 12_000;
 const IDENTITY_TIMEOUT_MS = 10_000;
+const LOGIN_PROMPT_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE = 64 * 1024;
+
+const activeLoginProcesses = new Map<string, ReturnType<typeof spawn>>();
 
 interface StatusResult { code: number; output: string }
 
@@ -253,34 +256,100 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
   }
   const resolved = which("codex");
   if (!resolved) return baseStatus(account, "cli_missing", "Codex CLI was not found on PATH.");
-  if (account.codexHome) mkdirSync(account.codexHome, { recursive: true });
-  const prepared = prepareSpawn([resolved, "login"]);
+  if (!account.codexHome) {
+    return baseStatus(account, "not_connected", "This profile is not isolated yet. Save/reload PingGPT and try again.");
+  }
+
+  mkdirSync(account.codexHome, { recursive: true });
+
+  const previous = activeLoginProcesses.get(account.id);
+  if (previous?.pid) {
+    killTree(previous.pid);
+    activeLoginProcesses.delete(account.id);
+  }
+
+  const native = resolveCodexNativeExecutable(resolved);
+  const prepared = native
+    ? { command: native, args: ["login", "--device-auth"] }
+    : prepareSpawn([resolved, "login", "--device-auth"]);
+
   return await new Promise<AccountAuthStatus>((resolve) => {
+    let child: ReturnType<typeof spawn> | undefined;
     let settled = false;
-    const finish = (status: AccountAuthStatus) => {
+    let captured = "";
+    let capturedBytes = 0;
+
+    const finish = (status: AccountAuthStatus, keepProcess = false) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
+      if (!keepProcess) {
+        killTree(child?.pid);
+      }
       resolve(status);
     };
 
-    let child;
+    const stripAnsi = (value: string) =>
+      value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+
+    const inspectPrompt = () => {
+      const clean = stripAnsi(captured);
+      const urlMatch = clean.match(/https:\/\/[^\s]+\/codex\/device\b/i);
+      const codeMatch = clean.match(/Enter this one-time code[\s\S]{0,240}?\n\s*([A-Z0-9-]{4,32})\b/i);
+
+      if (urlMatch && codeMatch) {
+        return finish({
+          accountId: account.id,
+          state: "login_started",
+          detail: "Device login is ready. Sign in as the intended ChatGPT account and enter the one-time code.",
+          loginUrl: urlMatch[0],
+          loginCode: codeMatch[1],
+        }, true);
+      }
+    };
+
+    const consume = (chunk: Buffer) => {
+      capturedBytes += chunk.length;
+      if (capturedBytes > MAX_CAPTURE) {
+        return finish(baseStatus(account, "not_connected", "Codex login produced too much output before device authorization was ready."));
+      }
+      captured += chunk.toString("utf8");
+      inspectPrompt();
+    };
+
     try {
       child = spawn(prepared.command, prepared.args, {
-        detached: true,
         windowsHide: true,
         env: accountEnv(account),
-        stdio: "ignore",
+        stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
-      return finish(baseStatus(account, "not_connected", "Codex login could not be started."));
+      return finish(baseStatus(account, "not_connected", "Codex device login could not be started."));
     }
 
+    activeLoginProcesses.set(account.id, child);
+    child.stdout?.on("data", consume);
+    child.stderr?.on("data", consume);
+
     child.once("error", () => {
-      finish(baseStatus(account, "not_connected", "Codex login process could not be started."));
+      activeLoginProcesses.delete(account.id);
+      finish(baseStatus(account, "not_connected", "Codex device login process could not be started."));
     });
-    child.once("spawn", () => {
-      child.unref();
-      finish(baseStatus(account, "login_started", "Codex login started. Complete the account selection in your browser."));
+
+    child.once("close", (code) => {
+      activeLoginProcesses.delete(account.id);
+      if (settled) return;
+      const clean = stripAnsi(captured).trim();
+      const detail = clean
+        ? clean.slice(-600)
+        : `Codex device login exited before authorization was ready (exit ${code ?? "unknown"}).`;
+      finish(baseStatus(account, "not_connected", detail));
     });
+
+    const timer = setTimeout(() => {
+      activeLoginProcesses.delete(account.id);
+      finish(baseStatus(account, "not_connected", "Timed out waiting for Codex device authorization instructions."));
+    }, LOGIN_PROMPT_TIMEOUT_MS);
+    timer.unref();
   });
 }
