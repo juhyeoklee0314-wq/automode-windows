@@ -8,6 +8,15 @@ export interface AccountProfile {
   message: string;
   schedules: string[];
   agent: "claude" | "codex";
+  catchupMinutes?: number;
+}
+
+export type AccountAuthState = "connected" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
+
+export interface AccountAuthStatus {
+  accountId: string;
+  state: AccountAuthState;
+  detail: string;
 }
 
 export interface GuiPreferences {
@@ -61,6 +70,9 @@ export interface AutomodeApi {
   save(payload: SavePayload): Promise<AppSnapshot>;
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;
+  newAccountProfile(): Promise<AccountProfile>;
+  getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus>;
+  connectAccount(accountId: string): Promise<AccountAuthStatus>;
   doctor(): Promise<DoctorCheck[]>;
   readLog(): Promise<string>;
   openLogFolder(): Promise<boolean>;
