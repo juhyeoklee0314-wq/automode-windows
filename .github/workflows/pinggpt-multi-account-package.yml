@@ -36,7 +36,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          npx electron-builder --win nsis --x64 --config.directories.output=release-multi-account-nsis
+          npx electron-builder --win nsis --x64 --publish never --config.directories.output=release-multi-account-nsis
 
       - name: Verify NSIS candidate
         shell: pwsh
