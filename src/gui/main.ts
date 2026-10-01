@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, powerMonitor, shell, Tray } from "electron";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,8 @@ import { exportDiagnosticSnapshot } from "./diagnostic-export.js";
 import { DIAGNOSTIC_CHANNEL } from "./channels.js";
 import { BUILD_IDENTITY, DIAGNOSTIC_LOG_PATH, DIAGNOSTIC_RECEIPT_PATH, DiagnosticTrace } from "./diagnostics.js";
 import { loadDiagnosticPreferences, loadPreferences, savePreferences } from "./preferences.js";
+import { requestWindowsSleep } from "./power-control.js";
+import { recordResume, recordSuspend } from "./power-state.js";
 import { resolveProcessMode } from "./routing.js";
 import { runScheduled, runScheduledDryRun } from "./scheduled-runner.js";
 import { schedulerExecutable, WindowsScheduler } from "./scheduler.js";
@@ -27,7 +29,14 @@ trace.emit("START_01_MAIN_ENTRY", "main", { execPath: process.execPath, mode: mo
 
 if (mode.kind === "scheduled") {
   trace.emit("START_02_MODE_ROUTED", "scheduled");
-  runScheduled(mode.accountId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
+  app.whenReady()
+    .then(() => runScheduled(mode.accountId, mode.scheduleId, new Date(), trace, {
+      isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
+      getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
+      requestSleep: () => requestWindowsSleep(),
+    }))
+    .then((code) => app.exit(code))
+    .catch(() => app.exit(1));
 } else if (mode.kind === "scheduled-dry-run") {
   trace.emit("START_02_MODE_ROUTED", "dry_run");
   runScheduledDryRun(mode.accountId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
@@ -57,8 +66,6 @@ function startGui(): void {
   let tray: Tray | null = null;
   let quitting = false;
   let heartbeat: NodeJS.Timeout | null = null;
-  // A development Electron path lives under node_modules and is not a stable
-  // scheduler target. Only packaged builds may touch Task Scheduler.
   if (!app.isPackaged || diagnosticStartup) process.env.AUTOMODE_SCHEDULER_DRY_RUN = "1";
   const schedulerTarget = schedulerExecutable(process.execPath);
   const scheduler = new WindowsScheduler(
@@ -127,16 +134,27 @@ function startGui(): void {
   app.on("will-quit", () => {
     trace.emit(activeExitSource === "tray" ? "EXIT_TRAY_12_WILL_QUIT" : "EXIT_GUI_12_WILL_QUIT", activeExitSource);
   });
-  // Keeping a listener here suppresses Electron's default quit-on-last-window
-  // behavior. The BrowserWindow is normally hidden, not destroyed.
   app.on("window-all-closed", () => {});
 
   app.whenReady().then(() => {
     trace.emit("START_04_APP_READY", "main");
+
+    powerMonitor.on("suspend", () => {
+      if (diagnosticStartup) return;
+      recordSuspend();
+      trace.emit("POWER_SUSPEND_RECORDED", "main");
+    });
+    powerMonitor.on("resume", () => {
+      if (diagnosticStartup) return;
+      recordResume();
+      const resumePreferences = loadPreferences(configmod.load());
+      if (resumePreferences.schedulerEnabled) writeLease(true);
+      trace.emit("POWER_RESUME_RECORDED", "main", { schedulerEnabled: resumePreferences.schedulerEnabled });
+    });
     trace.emit("START_11_WINDOW_CREATE_BEGIN", "main");
     window = new BrowserWindow({
-      width: 1100,
-      height: 760,
+      width: 1160,
+      height: 820,
       minWidth: 900,
       minHeight: 640,
       show: false,
@@ -197,9 +215,6 @@ function startGui(): void {
     trace.emit("START_SCHEDULER_BOOTSTRAP_BEGIN", "main");
     const preferences = loadPreferences(configmod.load());
     if (app.isPackaged && !diagnosticStartup && preferences.runAtLogin) {
-      // Re-register an enabled login item with the stable installed/Portable
-      // launcher. This replaces legacy or temporary extraction targets without
-      // changing the user's enabled preference.
       app.setLoginItemSettings({
         openAtLogin: true,
         path: schedulerExecutable(process.execPath),
@@ -227,6 +242,28 @@ function startGui(): void {
     ipcMain.handle("automode:save", (_event, payload: SavePayload) => service.save(payload));
     ipcMain.handle("automode:set-scheduler", (_event, enabled: boolean) => service.setScheduler(Boolean(enabled)));
     ipcMain.handle("automode:set-login", (_event, enabled: boolean) => setRunAtLogin(Boolean(enabled)));
+    ipcMain.handle("automode:new-account-profile", () => service.newAccountProfile());
+    ipcMain.handle("automode:account-auth-status", (_event, accountId: unknown) =>
+      service.getAccountAuthStatus(String(accountId ?? "")));
+    ipcMain.handle("automode:account-connect", (_event, accountId: unknown) =>
+      service.connectAccount(String(accountId ?? "")));
+    ipcMain.handle("automode:open-external-login", async (_event, rawUrl: unknown, rawCode: unknown) => {
+      try {
+        const url = new URL(String(rawUrl ?? ""));
+        const code = String(rawCode ?? "").trim().toUpperCase();
+        if (url.protocol !== "https:" || url.hostname !== "auth.openai.com" || url.pathname !== "/codex/device") {
+          return false;
+        }
+        if (!/^[A-Z0-9][A-Z0-9-]{2,30}[A-Z0-9]$/.test(code)) {
+          return false;
+        }
+        clipboard.writeText(code);
+        await shell.openExternal(url.toString());
+        return true;
+      } catch {
+        return false;
+      }
+    });
     ipcMain.handle("automode:doctor", () => service.doctor());
     ipcMain.handle("automode:read-log", () => service.readLog());
     ipcMain.handle("automode:open-log-folder", async () => {

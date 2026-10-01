@@ -10,10 +10,41 @@ export const GUI_TASK_PREFIX = "Automode GUI Ping";
 const receiptPath = (): string => join(stateDir(), "gui-schedule.json");
 
 interface Receipt { tasks: SchedulerTaskStatus[] }
+interface DesiredTask extends SchedulerTaskStatus { accountId: string; wakePc: boolean }
 export type TaskCommand = (args: string[]) => { ok: boolean; output: string };
+
+function powershellTaskSettings(taskName: string, wakePc: boolean): { ok: boolean; output: string } {
+  const safeName = taskName.replace(/'/g, "''");
+  const wakeLiteral = wakePc ? "$true" : "$false";
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "$svc=New-Object -ComObject 'Schedule.Service'",
+    "$svc.Connect()",
+    "$folder=$svc.GetFolder('\\')",
+    `$task=$folder.GetTask('${safeName}')`,
+    "$definition=$task.Definition",
+    `$definition.Settings.WakeToRun=${wakeLiteral}`,
+    "$definition.Settings.StartWhenAvailable=$true",
+    "$definition.Settings.DisallowStartIfOnBatteries=$true",
+    "$definition.Settings.StopIfGoingOnBatteries=$true",
+    "$folder.RegisterTaskDefinition($task.Name,$definition,6,$null,$null,3) | Out-Null",
+  ].join("; ");
+  try {
+    const output = execFileSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script,
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    return { ok: true, output: String(output) };
+  } catch (error) {
+    const detail = error as { stderr?: Buffer | string; message?: string };
+    return { ok: false, output: String(detail.stderr ?? detail.message ?? error).trim() };
+  }
+}
 
 function realTaskCommand(args: string[]): { ok: boolean; output: string } {
   if (process.env.AUTOMODE_SCHEDULER_DRY_RUN === "1") return { ok: true, output: "dry-run" };
+  if (args[0] === "@ConfigurePower") {
+    return powershellTaskSettings(String(args[1] ?? ""), args[2] === "true");
+  }
   try {
     return { ok: true, output: String(execFileSync("schtasks.exe", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })) };
   } catch (error) {
@@ -49,6 +80,34 @@ const safePart = (value: string): string => value.replace(/[^A-Za-z0-9_.-]/g, "_
 export const taskName = (accountId: string, scheduleId: string): string =>
   `${GUI_TASK_PREFIX} ${safePart(accountId)} ${safePart(scheduleId)}`;
 
+function desiredTasks(accounts: AccountProfile[]): DesiredTask[] {
+  const desired: DesiredTask[] = [];
+  for (const account of accounts.filter((entry) => entry.enabled)) {
+    account.schedules.forEach((time, index) => {
+      if (!parseHhmm(time)) return;
+      const scheduleId = `${time.replace(":", "")}-${index}`;
+      desired.push({
+        accountId: account.id,
+        wakePc: account.wakePc === true,
+        name: taskName(account.id, scheduleId),
+        scheduleId,
+        time,
+        installed: false,
+        enabled: false,
+      });
+    });
+  }
+  return desired;
+}
+
+function withoutName(tasks: SchedulerTaskStatus[], name: string): SchedulerTaskStatus[] {
+  return tasks.filter((task) => task.name !== name);
+}
+
+function upsertTask(tasks: SchedulerTaskStatus[], task: SchedulerTaskStatus): SchedulerTaskStatus[] {
+  return [...withoutName(tasks, task.name), task];
+}
+
 /** electron-builder Portable exposes the stable launcher here; process.execPath is its temporary extraction. */
 export function schedulerExecutable(execPath: string, portableFile = process.env.PORTABLE_EXECUTABLE_FILE): string {
   return portableFile?.trim() || execPath;
@@ -68,33 +127,75 @@ export class WindowsScheduler {
 
   install(accounts: AccountProfile[]): SchedulerTaskStatus[] {
     const existing = readReceipt(this.receiptFile);
-    const desired: SchedulerTaskStatus[] = [];
-    for (const account of accounts.filter((entry) => entry.enabled)) {
-      account.schedules.forEach((time, index) => {
-        if (!parseHhmm(time)) return;
-        const scheduleId = `${time.replace(":", "")}-${index}`;
-        desired.push({ name: taskName(account.id, scheduleId), scheduleId, time, installed: false, enabled: false });
-      });
-    }
-
+    const desired = desiredTasks(accounts);
     const wanted = new Set(desired.map((task) => task.name));
+    let tracked = [...existing.tasks];
+    const deleteFailures: string[] = [];
+
     for (const old of existing.tasks.filter((task) => !wanted.has(task.name))) {
-      this.runTask(["/Delete", "/TN", old.name, "/F"]);
+      const result = this.runTask(["/Delete", "/TN", old.name, "/F"]);
+      if (result.ok) {
+        tracked = withoutName(tracked, old.name);
+        writeReceipt(tracked, this.receiptFile);
+      } else {
+        deleteFailures.push(`${old.name}: ${result.output}`);
+      }
+    }
+    if (deleteFailures.length) {
+      throw new Error(`Task Scheduler could not remove obsolete PingGPT tasks: ${deleteFailures.join(" | ")}`);
     }
 
     const created: SchedulerTaskStatus[] = [];
     for (const task of desired) {
-      const account = accounts.find((entry) => task.name.includes(` ${safePart(entry.id)} `));
-      if (!account) continue;
       const result = this.runTask([
         "/Create", "/F", "/SC", "DAILY", "/ST", task.time, "/TN", task.name,
-        "/TR", windowsAction(this.executable, account.id, task.scheduleId), "/IT",
+        "/TR", windowsAction(this.executable, task.accountId, task.scheduleId), "/IT",
       ]);
-      if (!result.ok) throw new Error(`Task Scheduler failed for ${task.time}: ${result.output}`);
-      created.push({ ...task, installed: true, enabled: true });
+      if (!result.ok) {
+        writeReceipt(tracked, this.receiptFile);
+        throw new Error(`Task Scheduler failed for ${task.time}: ${result.output}`);
+      }
+
+      const power = this.runTask(["@ConfigurePower", task.name, task.wakePc ? "true" : "false"]);
+      if (!power.ok) {
+        this.runTask(["/Delete", "/TN", task.name, "/F"]);
+        tracked = withoutName(tracked, task.name);
+        writeReceipt(tracked, this.receiptFile);
+        throw new Error(`Task Scheduler power settings failed for ${task.time}: ${power.output}`);
+      }
+
+      const stored = { name: task.name, scheduleId: task.scheduleId, time: task.time, installed: true, enabled: true };
+      tracked = upsertTask(tracked, stored);
+      created.push(stored);
+      writeReceipt(tracked, this.receiptFile);
     }
-    writeReceipt(created, this.receiptFile);
-    return created;
+
+    const finalNames = new Set(created.map((task) => task.name));
+    tracked = tracked.filter((task) => finalNames.has(task.name));
+    writeReceipt(tracked, this.receiptFile);
+    return tracked;
+  }
+
+  /** Remove tasks for accounts/schedules that were deleted without enabling new work. */
+  prune(accounts: AccountProfile[]): SchedulerTaskStatus[] {
+    const receipt = readReceipt(this.receiptFile);
+    const wanted = new Set(desiredTasks(accounts).map((task) => task.name));
+    let tracked = [...receipt.tasks];
+    const failures: string[] = [];
+    for (const task of receipt.tasks) {
+      if (wanted.has(task.name)) continue;
+      const result = this.runTask(["/Delete", "/TN", task.name, "/F"]);
+      if (result.ok) {
+        tracked = withoutName(tracked, task.name);
+        writeReceipt(tracked, this.receiptFile);
+      } else {
+        failures.push(`${task.name}: ${result.output}`);
+      }
+    }
+    if (failures.length) {
+      throw new Error(`Task Scheduler could not remove obsolete PingGPT tasks: ${failures.join(" | ")}`);
+    }
+    return tracked;
   }
 
   setEnabled(enabled: boolean): SchedulerTaskStatus[] {
@@ -115,7 +216,6 @@ export class WindowsScheduler {
     });
   }
 
-  /** Read task identities for the asynchronous diagnostic collector without invoking schtasks. */
   diagnosticReceiptTasks(): SchedulerTaskStatus[] {
     return readDiagnosticReceipt(this.receiptFile).tasks;
   }

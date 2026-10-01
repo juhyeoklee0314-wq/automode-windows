@@ -9,10 +9,13 @@ import { acquireExecutionLock, clearLease, executionLockPath, leaseIsLive, STALE
 import { defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { reliablePing } from "../src/gui/reliable-ping.js";
 import { GUI_TASK_PREFIX, schedulerExecutable, WindowsScheduler } from "../src/gui/scheduler.js";
-import { accountPingEnvironment, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
+import { buildPingEnvironment } from "../src/agents/ping.js";
+import { accountPingEnvironment, accountPingUnsetEnvironment, elapsedMinutesForSchedule, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
+import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/gui/power-state.js";
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
 import { TRAY_ICON_RELATIVE_PATH, trayIconPath } from "../src/gui/tray-icon.js";
 import { DEFAULTS } from "../src/core/config.js";
+import { codexNativeCandidates, commandCandidates, prepareStdioSpawn } from "../src/platform/command.js";
 import { DIAGNOSTIC_LOG_PATH, DiagnosticTrace } from "../src/gui/diagnostics.js";
 import { resolveProcessMode } from "../src/gui/routing.js";
 
@@ -31,6 +34,85 @@ after(() => {
   if (oldConfig === undefined) delete process.env.XDG_CONFIG_HOME;
   else process.env.XDG_CONFIG_HOME = oldConfig;
   rmSync(root, { recursive: true, force: true });
+});
+
+describe("power wake state", () => {
+  it("correlates a resume only after a recorded suspend", () => {
+    const base = Date.now();
+    recordSuspend(base, process.pid);
+    assert.equal(recentlyResumedFromSuspend(base + 1_000), false);
+    recordResume(base + 2_000, process.pid);
+    assert.equal(recentlyResumedFromSuspend(base + 3_000), true);
+    assert.equal(recentlyResumedFromSuspend(base + 400_000), false);
+  });
+
+  it("handles catch-up across midnight without treating future schedules as due", () => {
+    assert.equal(elapsedMinutesForSchedule(new Date("2026-10-02T00:05:00Z"), "UTC", "23:55"), 10);
+    assert.equal(elapsedMinutesForSchedule(new Date("2026-10-02T16:00:00Z"), "UTC", "17:00"), 1380);
+  });
+});
+
+describe("Windows command resolution", () => {
+  it("never selects an extensionless npm shim on Windows", () => {
+    assert.deepEqual(
+      commandCandidates("C:\\npm\\codex", "win32", ".COM;.EXE;.BAT;.CMD"),
+      [
+        "C:\\npm\\codex.com",
+        "C:\\npm\\codex.exe",
+        "C:\\npm\\codex.bat",
+        "C:\\npm\\codex.cmd",
+      ],
+    );
+  });
+
+  it("leaves an already-qualified command untouched", () => {
+    assert.deepEqual(
+      commandCandidates("C:\\npm\\codex.cmd", "win32", ".COM;.EXE;.BAT;.CMD"),
+      ["C:\\npm\\codex.cmd"],
+    );
+  });
+
+  it("derives the native Codex executable behind a global npm shim", () => {
+    const candidates = codexNativeCandidates(
+      "C:\\Users\\sapdo\\AppData\\Local\\Author Software\\nvm\\installs\\v20.20.2\\codex.cmd",
+      "win32",
+      "x64",
+    );
+    assert.equal(
+      candidates[0],
+      "C:\\Users\\sapdo\\AppData\\Local\\Author Software\\nvm\\installs\\v20.20.2\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+    );
+    assert.ok(candidates.some((entry) =>
+      entry.endsWith("\\node_modules\\@openai\\codex\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe")));
+  });
+
+  it("routes long-lived Windows cmd shims through cmd.exe so redirected stdin survives", () => {
+    const oldComSpec = process.env.ComSpec;
+    process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+    try {
+      const prepared = prepareStdioSpawn(
+        "C:\\Program Files\\npm\\codex.cmd",
+        ["app-server", "--listen", "stdio://"],
+      );
+      if (process.platform === "win32") {
+        assert.equal(prepared.command, "C:\\Windows\\System32\\cmd.exe");
+        assert.deepEqual(prepared.args, [
+          "/d",
+          "/s",
+          "/c",
+          "\"C:\\Program Files\\npm\\codex.cmd\" \"app-server\" \"--listen\" \"stdio://\"",
+        ]);
+      } else {
+        assert.deepEqual(prepared, {
+          command: "C:\\Program Files\\npm\\codex.cmd",
+          args: ["app-server", "--listen", "stdio://"],
+        });
+      }
+    } finally {
+      if (oldComSpec === undefined) delete process.env.ComSpec;
+      else process.env.ComSpec = oldComSpec;
+    }
+  });
 });
 
 describe("GUI lifecycle lease", () => {
@@ -241,7 +323,18 @@ describe("reliability safeguards", () => {
     assert.deepEqual(accountPingEnvironment({ ...base, agent: "codex", codexHome: "C:\\Profiles\\work" }), {
       CODEX_HOME: "C:\\Profiles\\work",
     });
+    assert.deepEqual(accountPingUnsetEnvironment({ ...base, agent: "codex", codexHome: "C:\\Profiles\\work" }), [
+      "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+    ]);
     assert.equal(accountPingEnvironment({ ...base, agent: "claude", codexHome: "C:\\Profiles\\work" }), undefined);
+    const childEnv = buildPingEnvironment(
+      { CODEX_HOME: "C:\\Profiles\\work", OPENAI_API_KEY: "temporary-value" },
+      ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+    );
+    assert.equal(childEnv.CODEX_HOME, "C:\\Profiles\\work");
+    assert.equal(childEnv.OPENAI_API_KEY, undefined);
+    assert.equal(childEnv.CODEX_API_KEY, undefined);
+    assert.equal(childEnv.CODEX_ACCESS_TOKEN, undefined);
     assert.equal(process.env.CODEX_HOME, "inherited-profile");
     if (inherited === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = inherited;

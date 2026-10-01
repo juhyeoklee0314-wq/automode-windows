@@ -7,7 +7,8 @@
  */
 
 import { accessSync, constants, existsSync, statSync } from "node:fs";
-import { delimiter, extname, join } from "node:path";
+import { createRequire } from "node:module";
+import { delimiter, dirname, extname, join, parse, posix as posixPath, win32 as win32Path } from "node:path";
 
 export interface SpawnSpec {
   command: string;
@@ -24,8 +25,7 @@ function runnable(path: string): boolean {
   }
 }
 
-function windowsExtensions(): string[] {
-  const raw = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD";
+function windowsExtensions(raw = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD"): string[] {
   return raw
     .split(";")
     .map((ext) => ext.trim())
@@ -33,16 +33,33 @@ function windowsExtensions(): string[] {
     .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
 }
 
-function candidates(path: string): string[] {
-  if (process.platform !== "win32" || extname(path)) return [path];
-  return [path, ...windowsExtensions().map((ext) => path + ext.toLowerCase()), ...windowsExtensions().map((ext) => path + ext.toUpperCase())];
+export function commandCandidates(
+  path: string,
+  platform = process.platform,
+  pathext = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD",
+): string[] {
+  if (platform !== "win32" || extname(path)) return [path];
+
+  // Windows CreateProcess cannot directly execute npm's extensionless POSIX
+  // shim. Resolve only PATHEXT-backed files such as codex.cmd/codex.exe.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ext of windowsExtensions(pathext)) {
+    for (const candidate of [path + ext.toLowerCase(), path + ext.toUpperCase()]) {
+      const key = candidate.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+    }
+  }
+  return out;
 }
 
 /** Where a command lives, or null, without spawning a shell. */
 export function which(command: string): string | null {
   const hasSeparator = command.includes("/") || command.includes("\\");
   if (hasSeparator) {
-    for (const candidate of candidates(command)) {
+    for (const candidate of commandCandidates(command)) {
       if (runnable(candidate)) return candidate;
     }
     return null;
@@ -50,7 +67,7 @@ export function which(command: string): string | null {
 
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    for (const candidate of candidates(join(dir, command))) {
+    for (const candidate of commandCandidates(join(dir, command))) {
       if (runnable(candidate)) return candidate;
     }
   }
@@ -83,12 +100,24 @@ export function prepareSpawn(argv: string[]): SpawnSpec {
   const [command, ...args] = argv;
   if (!command) throw new Error("empty command");
 
-  if (process.platform !== "win32" || !/\.(?:cmd|bat)$/i.test(command)) {
+  if (process.platform !== "win32") {
+    return { command, args };
+  }
+
+  const powershell = powershellForShim();
+  if (/\.ps1$/i.test(command)) {
+    if (!powershell) return { command, args };
+    return {
+      command: powershell,
+      args: ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", command, ...args],
+    };
+  }
+
+  if (!/\.(?:cmd|bat)$/i.test(command)) {
     return { command, args };
   }
 
   const ps1 = command.replace(/\.(?:cmd|bat)$/i, ".ps1");
-  const powershell = powershellForShim();
   if (powershell && existsSync(ps1)) {
     return {
       command: powershell,
@@ -99,4 +128,169 @@ export function prepareSpawn(argv: string[]): SpawnSpec {
   const shell = process.env.ComSpec || which("cmd.exe") || "cmd.exe";
   const line = [command, ...args].map(cmdQuote).join(" ");
   return { command: shell, args: ["/d", "/s", "/c", line] };
+}
+
+
+function quoteCmdToken(value: string): string {
+  return '"' + value.replace(/([%])/g, "$1$1").replace(/"/g, '""') + '"';
+}
+
+/**
+ * Prepare a long-lived stdio child on Windows.
+ * npm .cmd/.bat shims are routed through cmd.exe instead of the sibling
+ * PowerShell shim because PowerShell does not transparently forward a
+ * redirected stdin stream to the native grandchild used by Codex app-server.
+ */
+export function prepareStdioSpawn(command: string, args: string[]): SpawnSpec {
+  if (process.platform !== "win32" || !/\.(?:cmd|bat)$/i.test(command)) {
+    return { command, args };
+  }
+
+  const comspec = process.env.ComSpec || process.env.COMSPEC || "cmd.exe";
+  const inner = [quoteCmdToken(command), ...args.map(quoteCmdToken)].join(" ");
+  return {
+    command: comspec,
+    args: ["/d", "/s", "/c", inner],
+  };
+}
+
+
+function codexTarget(platform = process.platform, arch = process.arch): { packageName: string; triple: string; executable: string } | null {
+  if (platform === "win32" && arch === "x64") {
+    return { packageName: "codex-win32-x64", triple: "x86_64-pc-windows-msvc", executable: "codex.exe" };
+  }
+  if (platform === "win32" && arch === "arm64") {
+    return { packageName: "codex-win32-arm64", triple: "aarch64-pc-windows-msvc", executable: "codex.exe" };
+  }
+  if (platform === "darwin" && arch === "x64") {
+    return { packageName: "codex-darwin-x64", triple: "x86_64-apple-darwin", executable: "codex" };
+  }
+  if (platform === "darwin" && arch === "arm64") {
+    return { packageName: "codex-darwin-arm64", triple: "aarch64-apple-darwin", executable: "codex" };
+  }
+  if ((platform === "linux" || platform === "android") && arch === "x64") {
+    return { packageName: "codex-linux-x64", triple: "x86_64-unknown-linux-musl", executable: "codex" };
+  }
+  if ((platform === "linux" || platform === "android") && arch === "arm64") {
+    return { packageName: "codex-linux-arm64", triple: "aarch64-unknown-linux-musl", executable: "codex" };
+  }
+  return null;
+}
+
+export function codexNativeCandidates(
+  command: string,
+  platform = process.platform,
+  arch = process.arch,
+): string[] {
+  const target = codexTarget(platform, arch);
+  if (!target) return [];
+
+  if (
+    (platform === "win32" && /codex\.exe$/i.test(command)) ||
+    (platform !== "win32" && /(?:^|[\\/])codex$/.test(command))
+  ) {
+    return [command];
+  }
+
+  const pathApi = platform === "win32" ? win32Path : posixPath;
+  const roots: string[] = [];
+  let current = pathApi.dirname(command);
+  const filesystemRoot = pathApi.parse(current).root;
+  for (let depth = 0; depth < 5; depth += 1) {
+    roots.push(current);
+    if (current === filesystemRoot) break;
+    const parent = pathApi.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const root of roots) {
+    const candidates = [
+      pathApi.join(
+        root,
+        "node_modules",
+        "@openai",
+        target.packageName,
+        "vendor",
+        target.triple,
+        "bin",
+        target.executable,
+      ),
+      pathApi.join(
+        root,
+        "node_modules",
+        "@openai",
+        "codex",
+        "node_modules",
+        "@openai",
+        target.packageName,
+        "vendor",
+        target.triple,
+        "bin",
+        target.executable,
+      ),
+      pathApi.join(
+        root,
+        "node_modules",
+        "@openai",
+        "codex",
+        "vendor",
+        target.triple,
+        "bin",
+        target.executable,
+      ),
+    ];
+    for (const candidate of candidates) {
+      const key = platform === "win32" ? candidate.toLowerCase() : candidate;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve the native Codex binary behind the npm launcher when available.
+ * This avoids shell/shim process layers for long-lived stdio RPC sessions.
+ */
+export function resolveCodexNativeExecutable(command: string): string | null {
+  const target = codexTarget();
+  if (!target) return null;
+
+  // Mirror the official @openai/codex launcher first: create a resolver rooted
+  // at @openai/codex and resolve the platform package's package.json.
+  let current = dirname(command);
+  const filesystemRoot = parse(current).root;
+  for (let depth = 0; depth < 5; depth += 1) {
+    const codexPackageJson = join(current, "node_modules", "@openai", "codex", "package.json");
+    if (existsSync(codexPackageJson)) {
+      try {
+        const requireFromCodex = createRequire(codexPackageJson);
+        const platformPackageJson = requireFromCodex.resolve(`@openai/${target.packageName}/package.json`);
+        const candidate = join(
+          dirname(platformPackageJson),
+          "vendor",
+          target.triple,
+          "bin",
+          target.executable,
+        );
+        if (runnable(candidate)) return candidate;
+      } catch {
+        // Fall through to deterministic filesystem candidates below.
+      }
+    }
+
+    if (current === filesystemRoot) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  for (const candidate of codexNativeCandidates(command)) {
+    if (runnable(candidate)) return candidate;
+  }
+  return null;
 }

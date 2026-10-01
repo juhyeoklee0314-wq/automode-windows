@@ -8,6 +8,21 @@ export interface AccountProfile {
   message: string;
   schedules: string[];
   agent: "claude" | "codex";
+  catchupMinutes?: number;
+  wakePc?: boolean;
+}
+
+export type AccountAuthState = "connected" | "wrong_auth" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
+
+export interface AccountAuthStatus {
+  accountId: string;
+  state: AccountAuthState;
+  detail: string;
+  email?: string | null;
+  planType?: string | null;
+  identityVerified?: boolean;
+  loginUrl?: string;
+  loginCode?: string;
 }
 
 export interface GuiPreferences {
@@ -61,6 +76,10 @@ export interface AutomodeApi {
   save(payload: SavePayload): Promise<AppSnapshot>;
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;
+  newAccountProfile(): Promise<AccountProfile>;
+  getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus>;
+  connectAccount(accountId: string): Promise<AccountAuthStatus>;
+  openExternalLogin(url: string, code: string): Promise<boolean>;
   doctor(): Promise<DoctorCheck[]>;
   readLog(): Promise<string>;
   openLogFolder(): Promise<boolean>;
