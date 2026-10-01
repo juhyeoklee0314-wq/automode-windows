@@ -10,11 +10,41 @@ export const GUI_TASK_PREFIX = "Automode GUI Ping";
 const receiptPath = (): string => join(stateDir(), "gui-schedule.json");
 
 interface Receipt { tasks: SchedulerTaskStatus[] }
-interface DesiredTask extends SchedulerTaskStatus { accountId: string }
+interface DesiredTask extends SchedulerTaskStatus { accountId: string; wakePc: boolean }
 export type TaskCommand = (args: string[]) => { ok: boolean; output: string };
+
+function powershellTaskSettings(taskName: string, wakePc: boolean): { ok: boolean; output: string } {
+  const safeName = taskName.replace(/'/g, "''");
+  const wakeLiteral = wakePc ? "$true" : "$false";
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "$svc=New-Object -ComObject 'Schedule.Service'",
+    "$svc.Connect()",
+    "$folder=$svc.GetFolder('\\')",
+    `$task=$folder.GetTask('${safeName}')`,
+    "$definition=$task.Definition",
+    `$definition.Settings.WakeToRun=${wakeLiteral}`,
+    "$definition.Settings.StartWhenAvailable=$true",
+    "$definition.Settings.DisallowStartIfOnBatteries=$true",
+    "$definition.Settings.StopIfGoingOnBatteries=$true",
+    "$folder.RegisterTaskDefinition($task.Name,$definition,6,$null,$null,3) | Out-Null",
+  ].join("; ");
+  try {
+    const output = execFileSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script,
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    return { ok: true, output: String(output) };
+  } catch (error) {
+    const detail = error as { stderr?: Buffer | string; message?: string };
+    return { ok: false, output: String(detail.stderr ?? detail.message ?? error).trim() };
+  }
+}
 
 function realTaskCommand(args: string[]): { ok: boolean; output: string } {
   if (process.env.AUTOMODE_SCHEDULER_DRY_RUN === "1") return { ok: true, output: "dry-run" };
+  if (args[0] === "@ConfigurePower") {
+    return powershellTaskSettings(String(args[1] ?? ""), args[2] === "true");
+  }
   try {
     return { ok: true, output: String(execFileSync("schtasks.exe", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })) };
   } catch (error) {
@@ -58,6 +88,7 @@ function desiredTasks(accounts: AccountProfile[]): DesiredTask[] {
       const scheduleId = `${time.replace(":", "")}-${index}`;
       desired.push({
         accountId: account.id,
+        wakePc: account.wakePc === true,
         name: taskName(account.id, scheduleId),
         scheduleId,
         time,
@@ -124,6 +155,15 @@ export class WindowsScheduler {
         writeReceipt(tracked, this.receiptFile);
         throw new Error(`Task Scheduler failed for ${task.time}: ${result.output}`);
       }
+
+      const power = this.runTask(["@ConfigurePower", task.name, task.wakePc ? "true" : "false"]);
+      if (!power.ok) {
+        this.runTask(["/Delete", "/TN", task.name, "/F"]);
+        tracked = withoutName(tracked, task.name);
+        writeReceipt(tracked, this.receiptFile);
+        throw new Error(`Task Scheduler power settings failed for ${task.time}: ${power.output}`);
+      }
+
       const stored = { name: task.name, scheduleId: task.scheduleId, time: task.time, installed: true, enabled: true };
       tracked = upsertTask(tracked, stored);
       created.push(stored);
