@@ -47,20 +47,20 @@ describe("Codex account authentication classification", () => {
     ].join("\n");
     assert.deepEqual(parseCodexDeviceLoginPrompt(output), {
       loginUrl: "https://auth.openai.com/codex/device",
-      loginCode: "ABCD-EFGH",
+      loginCode: "ABCD-EFGHI",
     });
   });
 
   it("keeps the device code in pending auth status while the login process is alive", () => {
     assert.deepEqual(deviceLoginPendingStatus("profile-a", {
       loginUrl: "https://auth.openai.com/codex/device",
-      loginCode: "ABCD-EFGH",
+      loginCode: "ABCD-EFGHI",
     }), {
       accountId: "profile-a",
       state: "login_started",
       detail: "Device login is waiting for authorization.",
       loginUrl: "https://auth.openai.com/codex/device",
-      loginCode: "ABCD-EFGH",
+      loginCode: "ABCD-EFGHI",
     });
   });
 
@@ -249,7 +249,7 @@ describe("multi-account GUI wiring", () => {
     assert.match(main, /automode:open-external-login/);
     assert.match(main, /auth\.openai\.com/);
     assert.match(main, /clipboard\.writeText\(code\)/);
-    assert.match(main, /\^\[A-Z0-9\]\{4\}-\[A-Z0-9\]\{4\}\$/);
+    assert.match(main, /\[A-Z0-9-\]\{2,30\}/);
     assert.match(source("src/gui/account-auth.ts"), /login", "--device-auth"/);
     assert.match(source("src/gui/renderer/app.js"), /Device code:/);
     assert.match(source("src/gui/renderer/app.js"), /copied to clipboard/);
