@@ -36,6 +36,16 @@ export function parseCodexDeviceLoginPrompt(output: string): CodexDeviceLoginPro
   return { loginUrl: urlMatch[0]!, loginCode: codeMatch[1]! };
 }
 
+export function deviceLoginPendingStatus(accountId: string, prompt: CodexDeviceLoginPrompt): AccountAuthStatus {
+  return {
+    accountId,
+    state: "login_started",
+    detail: "Device login is waiting for authorization.",
+    loginUrl: prompt.loginUrl,
+    loginCode: prompt.loginCode,
+  };
+}
+
 function accountEnv(account: AccountProfile): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (account.codexHome) {
@@ -245,13 +255,7 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
   const pendingProcess = activeLoginProcesses.get(account.id);
   const pendingPrompt = activeLoginPrompts.get(account.id);
   if (pendingProcess && pendingPrompt && pendingProcess.exitCode === null) {
-    return {
-      accountId: account.id,
-      state: "login_started",
-      detail: "Device login is waiting for authorization.",
-      loginUrl: pendingPrompt.loginUrl,
-      loginCode: pendingPrompt.loginCode,
-    };
+    return deviceLoginPendingStatus(account.id, pendingPrompt);
   }
 
   const resolved = which("codex");
