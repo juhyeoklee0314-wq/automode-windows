@@ -254,7 +254,7 @@ function startGui(): void {
         if (url.protocol !== "https:" || url.hostname !== "auth.openai.com" || url.pathname !== "/codex/device") {
           return false;
         }
-        if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) {
+        if (!/^[A-Z0-9][A-Z0-9-]{2,30}[A-Z0-9]$/.test(code)) {
           return false;
         }
         clipboard.writeText(code);
