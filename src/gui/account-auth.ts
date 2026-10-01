@@ -5,11 +5,25 @@ import { prepareSpawn, which } from "../platform/command.js";
 import type { AccountAuthStatus, AccountProfile } from "./types.js";
 
 const STATUS_TIMEOUT_MS = 12_000;
+const IDENTITY_TIMEOUT_MS = 10_000;
 const MAX_CAPTURE = 64 * 1024;
 
+interface StatusResult { code: number; output: string }
+
+export interface CodexAccountIdentity {
+  email: string | null;
+  planType: string | null;
+}
+
 function accountEnv(account: AccountProfile): NodeJS.ProcessEnv {
-  if (!account.codexHome) return process.env;
-  return { ...process.env, CODEX_HOME: account.codexHome };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (account.codexHome) {
+    env.CODEX_HOME = account.codexHome;
+    delete env.OPENAI_API_KEY;
+    delete env.CODEX_API_KEY;
+    delete env.CODEX_ACCESS_TOKEN;
+  }
+  return env;
 }
 
 function baseStatus(account: AccountProfile, state: AccountAuthStatus["state"], detail: string): AccountAuthStatus {
@@ -23,7 +37,20 @@ function killTree(pid: number | undefined): void {
   }
 }
 
-interface StatusResult { code: number; output: string }
+export function parseCodexAccountIdentity(result: unknown): CodexAccountIdentity | null {
+  if (!result || typeof result !== "object") return null;
+  const account = (result as Record<string, unknown>).account;
+  if (!account || typeof account !== "object") return null;
+  const record = account as Record<string, unknown>;
+  if (record.type !== "chatgpt") return null;
+
+  const rawEmail = typeof record.email === "string" ? record.email.trim() : "";
+  const rawPlan = typeof record.planType === "string" ? record.planType.trim() : "";
+  return {
+    email: rawEmail || null,
+    planType: rawPlan || null,
+  };
+}
 
 export function classifyCodexLoginStatus(accountId: string, code: number, output: string): AccountAuthStatus {
   if (code !== 0) return { accountId, state: "not_connected", detail: "This profile is not connected to ChatGPT." };
@@ -72,14 +99,148 @@ async function runStatus(command: string, account: AccountProfile): Promise<Stat
   });
 }
 
+async function readCodexAccountIdentity(command: string, account: AccountProfile): Promise<CodexAccountIdentity | null> {
+  const prepared = prepareSpawn([command, "app-server", "--listen", "stdio://"]);
+  return await new Promise<CodexAccountIdentity | null>((resolve) => {
+    let child;
+    let settled = false;
+    let stdoutBuffer = "";
+    let captured = 0;
+
+    const finish = (identity: CodexAccountIdentity | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { child?.stdin?.end(); } catch { /* already closed */ }
+      killTree(child?.pid);
+      resolve(identity);
+    };
+
+    const send = (payload: Record<string, unknown>) => {
+      try {
+        child?.stdin?.write(JSON.stringify(payload) + "\n");
+      } catch {
+        finish(null);
+      }
+    };
+
+    const handleLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      let message: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (!parsed || typeof parsed !== "object") return;
+        message = parsed as Record<string, unknown>;
+      } catch {
+        return;
+      }
+
+      if (message.method && message.id !== undefined) {
+        send({ id: message.id, result: {} });
+        return;
+      }
+
+      if (message.id === "pinggpt-init") {
+        if (message.error) return finish(null);
+        send({ method: "initialized" });
+        send({
+          id: "pinggpt-account",
+          method: "account/read",
+          params: { refreshToken: false },
+        });
+        return;
+      }
+
+      if (message.id === "pinggpt-account") {
+        if (message.error) return finish(null);
+        return finish(parseCodexAccountIdentity(message.result));
+      }
+    };
+
+    try {
+      child = spawn(prepared.command, prepared.args, {
+        windowsHide: true,
+        env: accountEnv(account),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch {
+      return finish(null);
+    }
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      captured += chunk.length;
+      if (captured > MAX_CAPTURE) return finish(null);
+      stdoutBuffer += chunk.toString("utf8");
+      let newline = stdoutBuffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = stdoutBuffer.slice(0, newline);
+        stdoutBuffer = stdoutBuffer.slice(newline + 1);
+        handleLine(line);
+        if (settled) return;
+        newline = stdoutBuffer.indexOf("\n");
+      }
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      captured += chunk.length;
+      if (captured > MAX_CAPTURE) finish(null);
+    });
+
+    child.once("error", () => finish(null));
+    child.once("close", () => finish(null));
+    child.once("spawn", () => {
+      send({
+        id: "pinggpt-init",
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "pinggpt",
+            title: "PingGPT",
+            version: "0.1.0",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+        },
+      });
+    });
+
+    const timer = setTimeout(() => finish(null), IDENTITY_TIMEOUT_MS);
+    timer.unref();
+  });
+}
+
 export async function codexAuthStatus(account: AccountProfile): Promise<AccountAuthStatus> {
   if (account.agent !== "codex") {
     return baseStatus(account, "not_codex", "Account uses Claude; Codex login is not required.");
   }
   const resolved = which("codex");
   if (!resolved) return baseStatus(account, "cli_missing", "Codex CLI was not found on PATH.");
+
   const result = await runStatus(resolved, account);
-  return classifyCodexLoginStatus(account.id, result.code, result.output);
+  const status = classifyCodexLoginStatus(account.id, result.code, result.output);
+  if (status.state !== "connected") return status;
+
+  const identity = await readCodexAccountIdentity(resolved, account);
+  if (!identity) {
+    return {
+      ...status,
+      identityVerified: false,
+      detail: "ChatGPT login is active, but Codex did not expose the account identity.",
+    };
+  }
+
+  return {
+    ...status,
+    email: identity.email,
+    planType: identity.planType,
+    identityVerified: true,
+    detail: identity.email
+      ? `Connected as ${identity.email}.`
+      : "ChatGPT login is active; Codex did not provide an email address.",
+  };
 }
 
 export async function startCodexLogin(account: AccountProfile): Promise<AccountAuthStatus> {
