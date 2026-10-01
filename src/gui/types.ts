@@ -21,6 +21,8 @@ export interface AccountAuthStatus {
   email?: string | null;
   planType?: string | null;
   identityVerified?: boolean;
+  loginUrl?: string;
+  loginCode?: string;
 }
 
 export interface GuiPreferences {
@@ -77,6 +79,7 @@ export interface AutomodeApi {
   newAccountProfile(): Promise<AccountProfile>;
   getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus>;
   connectAccount(accountId: string): Promise<AccountAuthStatus>;
+  openExternalLogin(url: string): Promise<boolean>;
   doctor(): Promise<DoctorCheck[]>;
   readLog(): Promise<string>;
   openLogFolder(): Promise<boolean>;
