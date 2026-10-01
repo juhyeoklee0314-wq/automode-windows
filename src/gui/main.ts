@@ -247,6 +247,18 @@ function startGui(): void {
       service.getAccountAuthStatus(String(accountId ?? "")));
     ipcMain.handle("automode:account-connect", (_event, accountId: unknown) =>
       service.connectAccount(String(accountId ?? "")));
+    ipcMain.handle("automode:open-external-login", async (_event, rawUrl: unknown) => {
+      try {
+        const url = new URL(String(rawUrl ?? ""));
+        if (url.protocol !== "https:" || url.hostname !== "auth.openai.com" || url.pathname !== "/codex/device") {
+          return false;
+        }
+        await shell.openExternal(url.toString());
+        return true;
+      } catch {
+        return false;
+      }
+    });
     ipcMain.handle("automode:doctor", () => service.doctor());
     ipcMain.handle("automode:read-log", () => service.readLog());
     ipcMain.handle("automode:open-log-folder", async () => {
