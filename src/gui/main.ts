@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, powerMonitor, shell, Tray } from "electron";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -247,12 +247,17 @@ function startGui(): void {
       service.getAccountAuthStatus(String(accountId ?? "")));
     ipcMain.handle("automode:account-connect", (_event, accountId: unknown) =>
       service.connectAccount(String(accountId ?? "")));
-    ipcMain.handle("automode:open-external-login", async (_event, rawUrl: unknown) => {
+    ipcMain.handle("automode:open-external-login", async (_event, rawUrl: unknown, rawCode: unknown) => {
       try {
         const url = new URL(String(rawUrl ?? ""));
+        const code = String(rawCode ?? "").trim().toUpperCase();
         if (url.protocol !== "https:" || url.hostname !== "auth.openai.com" || url.pathname !== "/codex/device") {
           return false;
         }
+        if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) {
+          return false;
+        }
+        clipboard.writeText(code);
         await shell.openExternal(url.toString());
         return true;
       } catch {
