@@ -165,14 +165,18 @@ function accountCard(account, saved = true) {
   const authCopy = document.createElement("div");
   authCopy.className = "auth-copy";
   const authTitle = document.createElement("strong");
+  authTitle.className = "account-auth-identity";
   authTitle.textContent = "ChatGPT account";
+  const authMeta = document.createElement("small");
+  authMeta.className = "account-auth-meta";
+  authMeta.textContent = saved ? "Reading account identity from Codex…" : "Save this profile to read account identity";
   const authPath = document.createElement("small");
   authPath.className = "account-auth-path";
   authPath.textContent = account.codexHome || "Default Codex profile (existing CLI login)";
   const authStatus = document.createElement("span");
   authStatus.className = "auth-status";
   authStatus.textContent = saved ? "CHECKING" : "SAVE TO CONNECT";
-  authCopy.append(authTitle, authPath, authStatus);
+  authCopy.append(authTitle, authMeta, authPath, authStatus);
   const connectButton = document.createElement("button");
   connectButton.className = "secondary small connect-account";
   connectButton.textContent = "Connect";
@@ -305,6 +309,13 @@ function authStatusElement(accountId) {
   return card?.querySelector(".auth-status") || null;
 }
 
+function formatPlanType(value) {
+  if (!value) return "";
+  return String(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function applyAuthStatus(status) {
   const el = authStatusElement(status.accountId);
   if (!el) return;
@@ -312,15 +323,33 @@ function applyAuthStatus(status) {
   const card = [...$("account-list").querySelectorAll(".account-card")]
     .find((entry) => entry.dataset.accountId === status.accountId);
   const button = card?.querySelector(".connect-account");
+  const identity = card?.querySelector(".account-auth-identity");
+  const meta = card?.querySelector(".account-auth-meta");
   if (button) button.textContent = status.state === "connected" ? "Reconnect" : "Connect";
+
   if (status.state === "connected") {
-    el.textContent = "CONNECTED";
+    el.textContent = status.identityVerified === false ? "CONNECTED · IDENTITY UNKNOWN" : "CONNECTED";
     el.classList.add("ok");
+    if (identity) identity.textContent = status.email || "ChatGPT account";
+    if (meta) {
+      const plan = formatPlanType(status.planType);
+      if (status.identityVerified === true) {
+        meta.textContent = status.email
+          ? [plan, "Identity verified by Codex"].filter(Boolean).join(" · ")
+          : [plan, "Email not provided by Codex"].filter(Boolean).join(" · ");
+      } else {
+        meta.textContent = "Login verified, but Codex account identity is unavailable";
+      }
+    }
   } else if (status.state === "login_started") {
     el.textContent = "LOGIN STARTED";
+    if (identity) identity.textContent = "ChatGPT account";
+    if (meta) meta.textContent = "Waiting for browser login to complete…";
   } else if (status.state === "wrong_auth") {
     el.textContent = "NOT CHATGPT AUTH";
     el.classList.add("bad");
+    if (identity) identity.textContent = "ChatGPT account";
+    if (meta) meta.textContent = "Codex is authenticated with a non-ChatGPT credential";
   } else if (status.state === "not_codex") {
     el.textContent = "NOT CODEX";
   } else if (status.state === "cli_missing") {
@@ -332,6 +361,8 @@ function applyAuthStatus(status) {
   } else {
     el.textContent = "NOT CONNECTED";
     el.classList.add("bad");
+    if (identity) identity.textContent = "ChatGPT account";
+    if (meta) meta.textContent = "No ChatGPT login is active for this profile";
   }
 }
 
@@ -354,7 +385,9 @@ async function pollAuthStatus(accountId) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const status = await refreshAuthStatus(accountId);
-    if (!status || status.state === "connected" || status.state === "cli_missing") return;
+    if (!status || status.state === "cli_missing") return;
+    if (status.state === "connected" && status.identityVerified !== false) return;
+    if (status.state === "connected" && attempt >= 4) return;
   }
 }
 
