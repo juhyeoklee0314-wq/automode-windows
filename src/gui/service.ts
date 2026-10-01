@@ -115,11 +115,11 @@ export class GuiService {
     return await codexAuthStatus(account);
   }
 
-  connectAccount(accountId: string): AccountAuthStatus {
+  async connectAccount(accountId: string): Promise<AccountAuthStatus> {
     const config = configmod.load();
     const account = loadPreferences(config).accounts.find((entry) => entry.id === accountId);
     if (!account) return missingProfileStatus(accountId);
-    const result = startCodexLogin(account);
+    const result = await startCodexLogin(account);
     this.trace?.emit("ACCOUNT_LOGIN_REQUESTED", "main", { accountId, state: result.state });
     return result;
   }
