@@ -140,7 +140,7 @@ function quoteCmdToken(value: string): string {
  * PowerShell shim because PowerShell does not transparently forward a
  * redirected stdin stream to the native grandchild used by Codex app-server.
  */
-export function prepareStdioSpawn(command: string, args: string[]): PreparedSpawn {
+export function prepareStdioSpawn(command: string, args: string[]): SpawnSpec {
   if (process.platform !== "win32" || !/\.(?:cmd|bat)$/i.test(command)) {
     return { command, args };
   }
