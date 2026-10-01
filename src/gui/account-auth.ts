@@ -91,7 +91,7 @@ async function runStatus(command: string, account: AccountProfile): Promise<Stat
       clearTimeout(timer);
       resolve({ code, output });
     };
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       killTree(child.pid);
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
       finish(124);
@@ -278,11 +278,12 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
     let settled = false;
     let captured = "";
     let capturedBytes = 0;
+    let timer: NodeJS.Timeout | null = null;
 
     const finish = (status: AccountAuthStatus, keepProcess = false) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (!keepProcess) {
         killTree(child?.pid);
       }
