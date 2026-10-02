@@ -8,6 +8,7 @@ const DIAGNOSTIC_CHANNEL = "automode:diagnostic";
 
 const api: AutomodeApi = Object.freeze({
   getSnapshot: () => ipcRenderer.invoke("automode:get-snapshot"),
+  getTaskInventory: () => ipcRenderer.invoke("automode:get-task-inventory"),
   save: (payload: SavePayload) => ipcRenderer.invoke("automode:save", payload),
   setScheduler: (enabled: boolean) => ipcRenderer.invoke("automode:set-scheduler", enabled),
   setRunAtLogin: (enabled: boolean) => ipcRenderer.invoke("automode:set-login", enabled),
