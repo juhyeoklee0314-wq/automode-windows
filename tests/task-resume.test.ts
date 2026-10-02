@@ -104,6 +104,15 @@ describe("task resume wiring safety", () => {
     assert.doesNotMatch(runtime, /decision: "accept"/i);
   });
 
+  it("verifies persisted creator identity before any resume input", () => {
+    const runtime = source("src/gui/codex-task-runtime.ts");
+    assert.match(runtime, /account\/rateLimits\/read/);
+    assert.match(runtime, /creator_account_id/);
+    assert.match(runtime, /verifyTaskAccountOwnership\(before, account\.codexHome, currentAccountId\)/);
+    assert.match(runtime, /Task creator account does not match/);
+    assert.match(runtime, /Task rollout is outside the selected account store/);
+  });
+
   it("uses official resume, turns-list, revert, and turn-start APIs", () => {
     const runtime = source("src/gui/codex-task-runtime.ts");
     assert.match(runtime, /"thread\/resume"/);
