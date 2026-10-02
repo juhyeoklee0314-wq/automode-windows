@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize, resolve } from "node:path";
 
@@ -268,6 +269,7 @@ async function initialize(session: AppServerSession, sourceKey: string): Promise
 }
 
 async function listSource(command: string, target: DiscoveryTarget): Promise<TaskInventoryItem[]> {
+  if (!existsSync(join(target.codexHome, "state_5.sqlite"))) return [];
   const session = await startAppServer(command, target.codexHome);
   const deadline = Date.now() + SOURCE_TIMEOUT_MS;
   try {
