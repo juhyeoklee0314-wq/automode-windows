@@ -56,6 +56,55 @@ jobs:
           "SHA256=$($hash.Hash)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
           "AUTHENTICODE_STATUS=$((Get-AuthenticodeSignature -LiteralPath $setup[0].FullName).Status)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
 
+      - name: Build code-only runtime patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $PWD 'runtime-patch'
+          $payload = Join-Path $root 'payload'
+          New-Item -ItemType Directory -Path $payload -Force | Out-Null
+
+          Copy-Item -LiteralPath 'dist' -Destination $payload -Recurse -Force
+          New-Item -ItemType Directory -Path (Join-Path $payload 'src\gui') -Force | Out-Null
+          Copy-Item -LiteralPath 'src\gui\renderer' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'src\gui\assets' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'package.json' -Destination $payload -Force
+
+          $manifest = Join-Path $root 'FILE_SHA256_MANIFEST.txt'
+          "SCHEMA=pinggpt.runtime-patch.v1" | Set-Content -LiteralPath $manifest -Encoding UTF8
+          "BRANCH=pinggpt-task-discovery-001" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          "COMMIT=$env:GITHUB_SHA" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          "MODE=CODE_ONLY_NO_EXECUTABLE" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          "PAYLOAD_ROOT=payload" | Add-Content -LiteralPath $manifest -Encoding UTF8
+
+          Get-ChildItem -LiteralPath $payload -File -Recurse |
+            Sort-Object FullName |
+            ForEach-Object {
+              $relative = [IO.Path]::GetRelativePath($payload, $_.FullName).Replace('\','/')
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+              "FILE=$relative|SIZE=$($_.Length)|SHA256=$hash" |
+                Add-Content -LiteralPath $manifest -Encoding UTF8
+            }
+
+          $zip = Join-Path $PWD 'Working_ZIP_PingGPT_261002_TaskDiscoveryFix_R1.02_RuntimePatch.zip'
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -LiteralPath (Join-Path $root 'payload'), $manifest -DestinationPath $zip -CompressionLevel Optimal
+
+          $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToUpperInvariant()
+          "ZIP_SHA256=$zipHash" | Set-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
+          "ZIP_SIZE=$((Get-Item -LiteralPath $zip).Length)" | Add-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
+          "COMMIT=$env:GITHUB_SHA" | Add-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
+
+      - name: Upload code-only runtime patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-task-discovery-runtime-patch
+          path: |
+            Working_ZIP_PingGPT_261002_TaskDiscoveryFix_R1.02_RuntimePatch.zip
+            PingGPT_RuntimePatch_OuterHash.txt
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload NSIS candidate
         uses: actions/upload-artifact@v4
         with:
