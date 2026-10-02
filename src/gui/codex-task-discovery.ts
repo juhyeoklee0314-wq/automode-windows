@@ -205,7 +205,7 @@ export function parseRolloutInventoryText(
 
   const createdAt = timestampSeconds(meta.timestamp);
   const updatedAt = Number.isFinite(modifiedAtSeconds) && modifiedAtSeconds > 0
-    ? modifiedAtSeconds
+    ? Math.floor(modifiedAtSeconds)
     : createdAt;
   const title = preview ?? `Codex task ${id.slice(0, 8)}`;
 
