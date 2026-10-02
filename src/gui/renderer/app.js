@@ -782,6 +782,9 @@ function renderTaskResumeSchedules(schedules) {
 
   const filtered = (schedules || []).filter((schedule) => {
     if (taskAccountFilter === 'legacy') return false;
+    const profile = (snapshot?.preferences?.accounts || [])
+      .find((entry) => entry.id === schedule.profileId);
+    if (!profile || profile.activeStoreId !== schedule.storeId) return false;
     if (taskAccountFilter === 'all') return true;
     return schedule.profileId === taskAccountFilter;
   });
