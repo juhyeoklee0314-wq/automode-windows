@@ -3,7 +3,7 @@ import { existsSync, openSync, readFileSync, writeFileSync, closeSync } from "no
 import { basename, join } from "node:path";
 
 import { redactSecrets } from "../core/redact.js";
-import type { AccountProfile, DiagnosticExportResult, SchedulerTaskStatus } from "./types.js";
+import type { AccountTarget, DiagnosticExportResult, SchedulerTaskStatus } from "./types.js";
 
 const RECENT_WINDOW_MS = 30 * 60 * 1000;
 const MAX_SECTION_CHARS = 80_000;
@@ -19,7 +19,7 @@ export interface DiagnosticExportContext {
   runId: string;
   primaryInstance: boolean;
   schedulerTarget: string;
-  accounts: AccountProfile[];
+  accounts: AccountTarget[];
   accountPreferencesError?: string;
   schedulerTasks: SchedulerTaskStatus[];
   schedulerStatusError?: string;
