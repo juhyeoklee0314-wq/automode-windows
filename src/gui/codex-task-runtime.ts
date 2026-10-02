@@ -424,6 +424,7 @@ export async function readAccountRateLimitStatus(account: AccountProfile): Promi
     const primaryResetsAt = numeric(primary?.resetsAt);
     const secondaryUsedPercent = numeric(secondary?.usedPercent);
     const secondaryResetsAt = numeric(secondary?.resetsAt);
+    const ordinaryUsageAllowed = typeof root?.ordinaryUsageAllowed === "boolean" ? root.ordinaryUsageAllowed : null;
     const blockedResets = [
       primaryUsedPercent !== null && primaryUsedPercent >= 100 ? primaryResetsAt : null,
       secondaryUsedPercent !== null && secondaryUsedPercent >= 100 ? secondaryResetsAt : null,
@@ -433,11 +434,13 @@ export async function readAccountRateLimitStatus(account: AccountProfile): Promi
     const suggestedResetAt = blockedResets.length
       ? Math.max(...blockedResets)
       : futureResets.length
-        ? Math.min(...futureResets)
+        ? ordinaryUsageAllowed === false
+          ? Math.max(...futureResets)
+          : Math.min(...futureResets)
         : null;
     return {
       accountId: account.id,
-      ordinaryUsageAllowed: typeof root?.ordinaryUsageAllowed === "boolean" ? root.ordinaryUsageAllowed : null,
+      ordinaryUsageAllowed,
       primaryUsedPercent,
       primaryResetsAt,
       secondaryUsedPercent,
