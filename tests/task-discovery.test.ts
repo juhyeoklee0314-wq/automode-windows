@@ -9,11 +9,13 @@ describe("Codex task inventory parsing", () => {
   const accountTarget = {
     source: "account" as const,
     accountId: "profile-a",
+    storeId: "store-a",
     accountLabel: "Main",
   };
   const legacyTarget = {
     source: "legacy_global" as const,
     accountId: null,
+    storeId: null,
     accountLabel: "Legacy / Global",
   };
 
@@ -38,6 +40,7 @@ describe("Codex task inventory parsing", () => {
     assert.ok(item);
     assert.equal(item.accountId, "profile-a");
     assert.equal(item.accountLabel, "Main");
+    assert.equal(item.storeId, "store-a");
     assert.equal(item.title, "Named task");
     assert.equal(item.ownershipStatus, "unverified");
     assert.equal(item.resumeEligibility, "ownership_unverified");
@@ -144,6 +147,7 @@ describe("Codex task inventory parsing", () => {
       providerAccountId: "provider-a",
       connectedEmail: "main@example.com",
       planType: "plus",
+      identityKey: "identity-a",
       identityVerified: true,
     });
     assert.equal(matched.ownershipStatus, "matched");
@@ -154,6 +158,7 @@ describe("Codex task inventory parsing", () => {
       providerAccountId: "provider-b",
       connectedEmail: "other@example.com",
       planType: "plus",
+      identityKey: "identity-a",
       identityVerified: true,
     });
     assert.equal(mismatch.ownershipStatus, "mismatch");
@@ -163,6 +168,7 @@ describe("Codex task inventory parsing", () => {
       providerAccountId: "provider-a",
       connectedEmail: "main@example.com",
       planType: "plus",
+      identityKey: "identity-a",
       identityVerified: true,
     });
     assert.equal(unverified.ownershipStatus, "unverified");
@@ -218,8 +224,8 @@ describe("task discovery safety boundary", () => {
     assert.match(renderer, /taskAccountFilter/);
     assert.match(renderer, /addTab\('all', 'All'/);
     assert.match(renderer, /addTab\('legacy', 'Legacy'/);
-    assert.match(renderer, /window\.automode\.resumeTask\(item\.accountId, item\.id, item\.updatedAt\)/);
-    assert.match(renderer, /window\.automode\.scheduleTaskResume\(\s*item\.accountId,/);
+    assert.match(renderer, /window\\.automode\\.resumeTask\\(item\\.accountId, item\\.storeId, item\\.id, item\\.updatedAt\\)/);
+    assert.match(renderer, /window\\.automode\\.scheduleTaskResume\\(\\s*item\\.accountId,\\s*item\\.storeId,/);
     assert.doesNotMatch(renderer, /resumeTask\(taskAccountFilter/);
     assert.doesNotMatch(renderer, /scheduleTaskResume\(\s*taskAccountFilter/);
     assert.match(styles, /header \{ position:sticky; top:0;/);
