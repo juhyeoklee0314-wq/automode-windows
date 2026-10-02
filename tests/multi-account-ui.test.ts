@@ -22,6 +22,7 @@ import {
   runnableAccountTargets,
 } from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
+import { expireMissedTaskResumeSchedulesForStore } from "../src/gui/service.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
 import type { AccountTarget } from "../src/gui/types.js";
 
@@ -224,6 +225,47 @@ describe("R1.07 account-store persistence", () => {
     assert.deepEqual(runnableAccountTargets(preferences), []);
   });
 
+  it("expires a missed one-shot only when its inactive store is reactivated", () => {
+    const profile = newAccountProfile(DEFAULTS, []);
+    profile.enabled = true;
+    const a = activeAccountStore(profile)!;
+    a.bindingState = "ready";
+    const b = newAccountStore(DEFAULTS, profile);
+    b.bindingState = "ready";
+    profile.stores.push(b);
+    profile.activeStoreId = a.id;
+
+    const preferences = {
+      schemaVersion: 2 as const,
+      runAtLogin: false,
+      schedulerEnabled: true,
+      accounts: [profile],
+      taskResumeSchedules: [{
+        id: "resume-b",
+        profileId: profile.id,
+        storeId: b.id,
+        threadId: "01a00000-0000-7000-8000-000000000001",
+        title: "B task",
+        runAt: "2026-10-03T00:00:00.000Z",
+        expectedUpdatedAt: null,
+        wakePc: false,
+        enabled: true,
+        createdAt: "2026-10-02T00:00:00.000Z",
+        completedAt: null,
+        lastStatus: null,
+      }],
+    };
+
+    assert.equal(expireMissedTaskResumeSchedulesForStore(
+      preferences,
+      profile.id,
+      b.id,
+      new Date("2026-10-03T00:01:00.000Z"),
+    ), 1);
+    assert.equal(preferences.taskResumeSchedules[0]?.enabled, false);
+    assert.equal(preferences.taskResumeSchedules[0]?.lastStatus, "rejected");
+  });
+
   it("uses each store catch-up window with legacy fallback", () => {
     const base = target("a", "store-a", "06:00");
     assert.equal(accountCatchupMinutes({ ...base, catchupMinutes: 7 }, DEFAULTS), 7);
@@ -320,6 +362,22 @@ describe("R1.07 account-management GUI wiring", () => {
     assert.match(main, /automode:new-account-store/);
     assert.match(main, /automode:account-activate-store/);
     assert.match(source("src/gui/account-auth.ts"), /login", "--device-auth"/);
+  });
+
+  it("commits activeStoreId only after auth, ownership, and duplicate-store checks", () => {
+    const service = source("src/gui/service.ts");
+    const start = service.indexOf("async activateAccountStore");
+    const auth = service.indexOf("await codexAuthStatus(account)", start);
+    const discovery = service.indexOf("await discoverCodexTasks([account])", start);
+    const mismatch = service.indexOf("const hasMismatch", start);
+    const duplicate = service.indexOf("const duplicate", start);
+    const commit = service.indexOf("profile.activeStoreId = store.id", start);
+    assert.ok(start >= 0);
+    assert.ok(auth > start);
+    assert.ok(discovery > auth);
+    assert.ok(mismatch > discovery);
+    assert.ok(duplicate > mismatch);
+    assert.ok(commit > duplicate);
   });
 
   it("keeps Start Menu integration while disabling the Desktop shortcut", () => {
