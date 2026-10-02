@@ -9,7 +9,7 @@ import { acquireExecutionLock, clearLease, executionLockPath, leaseIsLive, STALE
 import { defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { reliablePing } from "../src/gui/reliable-ping.js";
 import { GUI_TASK_PREFIX, schedulerExecutable, WindowsScheduler } from "../src/gui/scheduler.js";
-import { buildPingEnvironment } from "../src/agents/ping.js";
+import { buildPingEnvironment, headlessArgv } from "../src/agents/ping.js";
 import { accountPingEnvironment, accountPingUnsetEnvironment, elapsedMinutesForSchedule, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
 import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/gui/power-state.js";
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
@@ -313,6 +313,10 @@ describe("reliability safeguards", () => {
     const code = await runScheduledDryRun("default", "0500-0");
     assert.ok([0, 127].includes(code));
     assert.equal(existsSync(statePath), false);
+  });
+
+  it("keeps headless Codex pings ephemeral so they do not pollute task history", () => {
+    assert.deepEqual(headlessArgv("codex", "hi"), ["codex", "exec", "--ephemeral", "hi"]);
   });
 
   it("applies CODEX_HOME only to an explicitly configured Codex account", () => {
