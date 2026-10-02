@@ -479,7 +479,6 @@ export async function resumeCodexTask(
       return result(account.id, threadId, "abort", "history_changed", "The task changed after the Task list was loaded.");
     }
 
-    await resumeThread(session, threadId);
     const initialTurns = await listLatestTurns(session, threadId);
     const historyMode = typeof before.historyMode === "string" ? before.historyMode : "unknown";
     const decision = decideResumeRecovery(initialTurns, historyMode);
@@ -491,6 +490,7 @@ export async function resumeCodexTask(
       return result(account.id, threadId, "abort", "rejected", `Resume was blocked: ${decision.reason}.`);
     }
 
+    await resumeThread(session, threadId);
     const verifyThread = await readThread(session, threadId);
     const verifyTurns = await listLatestTurns(session, threadId);
     if (snapshotHash(before, initialTurns) !== snapshotHash(verifyThread, verifyTurns)) {
