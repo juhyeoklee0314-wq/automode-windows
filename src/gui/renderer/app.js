@@ -463,20 +463,29 @@ function taskFilterOptions(data) {
     }
   }
 
+  const accountStates = new Map((data.accounts || []).map((state) => [state.accountId, state]));
   const configured = (snapshot?.preferences?.accounts || [])
     .filter((account) => account.agent === 'codex' && account.enabled !== false)
-    .map((account) => ({
-      id: account.id,
-      label: account.displayName || account.id,
-      count: counts.get(account.id) || 0,
-    }));
+    .map((account) => {
+      const state = accountStates.get(account.id);
+      const connected = state?.connectedEmail
+        || (state?.identityVerified ? 'Connected' : 'Identity unverified');
+      return {
+        id: account.id,
+        label: (account.displayName || account.id) + ' · ' + connected,
+        count: counts.get(account.id) || 0,
+      };
+    });
 
   for (const item of data.items || []) {
     if (item.source !== 'account' || !item.accountId) continue;
     if (configured.some((account) => account.id === item.accountId)) continue;
+    const state = accountStates.get(item.accountId);
+    const connected = state?.connectedEmail
+      || (state?.identityVerified ? 'Connected' : 'Identity unverified');
     configured.push({
       id: item.accountId,
-      label: item.accountLabel || item.accountId,
+      label: (item.accountLabel || item.accountId) + ' · ' + connected,
       count: counts.get(item.accountId) || 0,
     });
   }
@@ -533,16 +542,24 @@ function taskMatchesFilter(item) {
   return true;
 }
 
+function inventoryAccountState(accountId) {
+  if (!accountId) return null;
+  return (taskInventorySnapshot?.accounts || []).find((state) => state.accountId === accountId) || null;
+}
+
 function taskMatchesSearch(item) {
   const query = taskSearchQuery.trim().toLowerCase();
   if (!query) return true;
+  const accountState = inventoryAccountState(item.accountId);
   return [
     item.title,
     item.preview,
     item.cwd,
     item.accountLabel,
+    accountState?.connectedEmail,
     item.model,
     item.sessionSource,
+    item.ownershipStatus,
   ].filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
 }
 
@@ -557,6 +574,20 @@ function activeTaskSchedule(item) {
 
 function taskState(item) {
   if (item.source === 'legacy_global') return { label: 'LEGACY', className: '' };
+  if (item.ownershipStatus === 'mismatch') {
+    return {
+      label: 'ACCOUNT MISMATCH',
+      className: 'mismatch',
+      title: 'This task was created by a different ChatGPT account than the account currently connected to this PingGPT profile.',
+    };
+  }
+  if (item.ownershipStatus !== 'matched') {
+    return {
+      label: 'OWNERSHIP UNVERIFIED',
+      className: 'unverified',
+      title: 'PingGPT could not verify that the connected ChatGPT account created this task.',
+    };
+  }
   const scheduled = activeTaskSchedule(item);
   if (scheduled) {
     return {
@@ -759,15 +790,28 @@ function renderTaskInventory(data) {
 
   filteredItems.forEach((item) => {
     const row = document.createElement('div');
-    row.className = 'codex-task-row ' + (item.source === 'legacy_global' ? 'legacy' : 'owned');
+    const ownershipClass = item.source === 'legacy_global'
+      ? 'legacy'
+      : item.ownershipStatus === 'mismatch'
+        ? 'mismatch'
+        : item.ownershipStatus === 'matched'
+          ? 'owned'
+          : 'unverified';
+    row.className = 'codex-task-row ' + ownershipClass;
 
     const copy = document.createElement('div');
     copy.className = 'codex-task-copy';
     const title = document.createElement('strong');
     title.textContent = item.title;
     const meta = document.createElement('small');
+    const accountState = inventoryAccountState(item.accountId);
+    const connectedLabel = item.source === 'account'
+      ? (accountState?.connectedEmail
+        || (accountState?.identityVerified ? 'Connected account verified' : 'Connected identity unavailable'))
+      : null;
     meta.textContent = [
-      item.accountLabel,
+      item.source === 'account' ? 'Stored in ' + item.accountLabel : item.accountLabel,
+      connectedLabel ? 'Connected: ' + connectedLabel : null,
       item.model,
       item.sessionSource,
       formatTaskTime(taskTimestamp(item)),
@@ -781,8 +825,8 @@ function renderTaskInventory(data) {
     actions.className = 'codex-task-actions';
 
     const ownership = document.createElement('span');
-    ownership.className = 'badge ' + (item.source === 'account' ? 'ok' : '');
-    ownership.textContent = item.source === 'account' ? 'ACCOUNT TASK' : 'LEGACY / GLOBAL';
+    ownership.className = 'badge ' + (item.source === 'account' ? 'profile' : '');
+    ownership.textContent = item.source === 'account' ? 'PROFILE TASK' : 'LEGACY / GLOBAL';
 
     const operational = taskState(item);
     const operationalBadge = document.createElement('span');
@@ -822,8 +866,16 @@ function renderTaskInventory(data) {
       const disabled = document.createElement('button');
       disabled.className = 'secondary small';
       disabled.disabled = true;
-      disabled.textContent = 'Cross-account unavailable';
-      disabled.title = 'Legacy / Global tasks cannot be resumed through an isolated account store.';
+      if (item.resumeEligibility === 'account_mismatch') {
+        disabled.textContent = 'Reconnect matching account';
+        disabled.title = 'The task creator does not match the ChatGPT account currently connected to this PingGPT profile.';
+      } else if (item.resumeEligibility === 'ownership_unverified') {
+        disabled.textContent = 'Ownership unverified';
+        disabled.title = 'PingGPT could not verify task ownership, so resume and scheduling are disabled.';
+      } else {
+        disabled.textContent = 'Cross-account unavailable';
+        disabled.title = 'Legacy / Global tasks cannot be resumed through an isolated account store.';
+      }
       actions.append(disabled);
     }
 
