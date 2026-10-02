@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { parseTaskInventoryPage, parseTaskInventoryThread } from "../src/gui/codex-task-discovery.js";
+import { parseRolloutInventoryText, parseTaskInventoryPage, parseTaskInventoryThread } from "../src/gui/codex-task-discovery.js";
 
 describe("Codex task inventory parsing", () => {
   const accountTarget = {
@@ -68,15 +68,75 @@ describe("Codex task inventory parsing", () => {
     assert.equal(parseTaskInventoryThread({ preview: "missing id" }, accountTarget), null);
     assert.equal(parseTaskInventoryThread(null, accountTarget), null);
   });
+
+  it("discovers an unindexed isolated exec rollout without provider-store mutation", () => {
+    const text = [
+      JSON.stringify({
+        timestamp: "2026-10-02T12:13:11.000Z",
+        type: "session_meta",
+        payload: {
+          creator_account_id: "acct-test",
+          id: "01a0fc88-6926-7d61-8ca9-b71b7dd898e3",
+          timestamp: "2026-10-02T12:13:11.000Z",
+          cwd: "C:\\work",
+          originator: "codex_exec",
+          cli_version: "0.157.1",
+          source: "exec",
+          model_provider: "openai",
+          history_mode: "paginated",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-10-02T12:13:12.000Z",
+        type: "event_msg",
+        payload: {
+          type: "user_message",
+          message: "[PINGGPT_RESUME_TEST_20261002-211311] disposable verification",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-10-02T12:13:12.000Z",
+        type: "turn_context",
+        payload: { model: "gpt-5.6-sol" },
+      }),
+    ].join("\n");
+
+    const item = parseRolloutInventoryText(text, 1_759_407_192, accountTarget);
+    assert.ok(item);
+    assert.equal(item.id, "01a0fc88-6926-7d61-8ca9-b71b7dd898e3");
+    assert.equal(item.sessionSource, "exec");
+    assert.equal(item.model, "gpt-5.6-sol");
+    assert.match(item.title, /PINGGPT_RESUME_TEST/);
+    assert.equal(item.resumeEligibility, "same_profile_candidate");
+    assert.equal("path" in item, false);
+  });
+
+  it("rejects rollout fallback rows without persisted creator identity", () => {
+    const text = JSON.stringify({
+      type: "session_meta",
+      payload: {
+        id: "01a0fc88-6926-7d61-8ca9-b71b7dd898e3",
+        timestamp: "2026-10-02T12:13:11.000Z",
+        cwd: "C:\\work",
+        source: "exec",
+      },
+    });
+    assert.equal(parseRolloutInventoryText(text, 123, accountTarget), null);
+  });
 });
 
 describe("task discovery safety boundary", () => {
   const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
-  it("uses state-db-only thread/list and contains no task mutation RPC", () => {
+  it("keeps discovery read-only while covering indexed and unindexed account tasks", () => {
     const discovery = source("src/gui/codex-task-discovery.ts");
     assert.match(discovery, /["']thread\/list["']/);
     assert.match(discovery, /useStateDbOnly:\s*true/);
+    assert.match(discovery, /sourceKinds:\s*target\.source === "account"/);
+    assert.match(discovery, /"exec", "appServer"/);
+    assert.match(discovery, /join\(codexHome, "sessions"\)/);
+    assert.match(discovery, /parseRolloutInventoryText/);
+    assert.doesNotMatch(discovery, /useStateDbOnly:\s*false/);
     assert.doesNotMatch(discovery, /["']thread\/(?:start|resume|fork|delete|archive|unarchive|rollback)["']/);
     assert.doesNotMatch(discovery, /["']turn\/(?:start|steer|interrupt)["']/);
     assert.match(discovery, /delete env\.OPENAI_API_KEY/);
