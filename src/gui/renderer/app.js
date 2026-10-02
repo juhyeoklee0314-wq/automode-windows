@@ -19,6 +19,13 @@ function clampNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, Math.round(parsed)));
 }
 
+function activeStoreForProfile(profile) {
+  if (!profile) return null;
+  return (profile.stores || []).find((store) => store.id === profile.activeStoreId)
+    || (profile.stores || [])[0]
+    || null;
+}
+
 function render(data) {
   snapshot = data;
   const c = data.config;
@@ -76,11 +83,14 @@ function render(data) {
 }
 
 function accountCard(account, saved = true) {
+  const activeStore = activeStoreForProfile(account);
   const card = document.createElement("div");
   card.className = `account-card${account.enabled ? "" : " disabled"}`;
   card.dataset.accountId = account.id;
-  card.dataset.codexHome = account.codexHome || "";
+  card.dataset.storeId = activeStore?.id || "";
+  card.dataset.codexHome = activeStore?.codexHome || "";
   card.dataset.saved = saved ? "true" : "false";
+  card._accountProfile = structuredClone(account);
 
   const head = document.createElement("div");
   head.className = "account-head";
@@ -121,7 +131,6 @@ function accountCard(account, saved = true) {
     refreshAutomationTabLabels();
     showBanner("Profile removed from the draft. Save changes to apply.");
   };
-
   head.append(nameLabel, enableWrap, deleteButton);
 
   const grid = document.createElement("div");
@@ -147,7 +156,7 @@ function accountCard(account, saved = true) {
   catchupInput.type = "number";
   catchupInput.min = "0";
   catchupInput.max = "180";
-  catchupInput.value = String(account.catchupMinutes ?? snapshot?.config?.ping?.catchup_minutes ?? 30);
+  catchupInput.value = String(activeStore?.catchupMinutes ?? snapshot?.config?.ping?.catchup_minutes ?? 30);
   catchupLabel.append(catchupInput);
 
   const wakeLabel = document.createElement("label");
@@ -163,12 +172,11 @@ function accountCard(account, saved = true) {
   const wakeInput = document.createElement("input");
   wakeInput.className = "account-wake";
   wakeInput.type = "checkbox";
-  wakeInput.checked = account.wakePc === true;
+  wakeInput.checked = activeStore?.wakePc === true;
   const wakeSlider = document.createElement("span");
   wakeSwitch.append(wakeInput, wakeSlider);
   wakeWrap.append(wakeText, wakeSwitch);
   wakeLabel.append(wakeWrap);
-
   grid.append(agentLabel, catchupLabel, wakeLabel);
 
   const auth = document.createElement("div");
@@ -177,22 +185,50 @@ function accountCard(account, saved = true) {
   authCopy.className = "auth-copy";
   const authTitle = document.createElement("strong");
   authTitle.className = "account-auth-identity";
-  authTitle.textContent = "Actual ChatGPT account";
+  authTitle.textContent = activeStore?.lastKnownEmail || "Actual ChatGPT account";
   const authMeta = document.createElement("small");
   authMeta.className = "account-auth-meta";
-  authMeta.textContent = saved ? "Reading account identity from Codex…" : "Save this profile to read account identity";
+  authMeta.textContent = saved ? "Reading active account identity from Codex…" : "Save this profile to manage its account";
   const authPath = document.createElement("small");
   authPath.className = "account-auth-path";
-  authPath.textContent = account.codexHome || "Default Codex profile (existing CLI login)";
+  authPath.textContent = activeStore?.codexHome || "No account store";
   const authStatus = document.createElement("span");
   authStatus.className = "auth-status";
   authStatus.textContent = saved ? "CHECKING" : "SAVE TO CONNECT";
   authCopy.append(authTitle, authMeta, authPath, authStatus);
-  const connectButton = document.createElement("button");
-  connectButton.className = "secondary small connect-account";
-  connectButton.textContent = "Connect";
-  connectButton.onclick = () => connectAccount(card);
-  auth.append(authCopy, connectButton);
+
+  const manageButton = document.createElement("button");
+  manageButton.className = "secondary small connect-account";
+  manageButton.textContent = "Manage account";
+
+  const manager = document.createElement("div");
+  manager.className = "account-grid account-store-manager hidden";
+  const storeLabel = document.createElement("label");
+  storeLabel.textContent = "Use account";
+  const storeSelect = document.createElement("select");
+  storeSelect.className = "account-store-select";
+  (account.stores || []).forEach((store, index) => {
+    const option = document.createElement("option");
+    option.value = store.id;
+    const known = store.lastKnownEmail || (store.id === account.activeStoreId ? "Current account" : `Stored account ${index + 1}`);
+    option.textContent = store.id === account.activeStoreId ? `${known} (current)` : known;
+    storeSelect.append(option);
+  });
+  const addOption = document.createElement("option");
+  addOption.value = "__new__";
+  addOption.textContent = "Connect another account";
+  storeSelect.append(addOption);
+  storeSelect.value = account.activeStoreId || "__new__";
+  storeLabel.append(storeSelect);
+
+  const useButton = document.createElement("button");
+  useButton.className = "secondary small";
+  useButton.type = "button";
+  useButton.textContent = "Continue";
+  useButton.onclick = () => manageAccountSelection(card, storeSelect.value);
+  manager.append(storeLabel, useButton);
+  manageButton.onclick = () => manager.classList.toggle("hidden");
+  auth.append(authCopy, manageButton);
 
   const messageLabel = document.createElement("label");
   messageLabel.className = "account-message";
@@ -201,7 +237,7 @@ function accountCard(account, saved = true) {
   messageInput.className = "account-message-input";
   messageInput.maxLength = 2000;
   messageInput.rows = 2;
-  messageInput.value = account.message;
+  messageInput.value = activeStore?.message || snapshot?.config?.ping?.message || "hi";
   messageLabel.append(messageInput);
 
   const timesWrap = document.createElement("div");
@@ -218,17 +254,19 @@ function accountCard(account, saved = true) {
   addTime.onclick = () => addTimeRow(times, "09:00");
   timesHead.append(timesTitle, addTime);
   timesWrap.append(timesHead, times);
-  (account.schedules || []).forEach((time) => addTimeRow(times, time));
+  (activeStore?.schedules || []).forEach((time) => addTimeRow(times, time));
 
   const updateVisibility = () => {
     card.classList.toggle("disabled", !enableInput.checked);
     auth.classList.toggle("hidden", agentSelect.value !== "codex");
+    manager.classList.toggle("hidden", agentSelect.value !== "codex" || manager.classList.contains("hidden"));
   };
   enableInput.onchange = updateVisibility;
   agentSelect.onchange = updateVisibility;
 
-  card.append(head, grid, auth, messageLabel, timesWrap);
-  updateVisibility();
+  card.append(head, grid, auth, manager, messageLabel, timesWrap);
+  card.classList.toggle("disabled", !enableInput.checked);
+  auth.classList.toggle("hidden", agentSelect.value !== "codex");
   return card;
 }
 
@@ -267,7 +305,22 @@ function renderAccounts(accounts) {
   accounts.forEach((account) => root.append(accountCard(account, true)));
   ensureEmptyAccountsMessage();
   accounts.filter((account) => account.agent === "codex").forEach((account) => {
-    refreshAuthStatus(account.id);
+    const store = activeStoreForProfile(account);
+    if (!store) return;
+    refreshAuthStatus(account.id, store.id).then(async (status) => {
+      if (
+        status?.state === "connected"
+        && status.identityVerified === true
+        && store.bindingState !== "ready"
+      ) {
+        const result = await window.automode.activateAccountStore(account.id, store.id);
+        applyAuthStatus(result.status);
+        if (result.ok) {
+          render(result.snapshot);
+          await refreshTasks({ source: "migration", quiet: true });
+        }
+      }
+    });
   });
 }
 
@@ -331,20 +384,22 @@ function refreshAutomationTabLabels() {
 
 function readAccounts() {
   return [...$("account-list").querySelectorAll(".account-card")].map((card, index) => {
-    const schedules = [...card.querySelectorAll(".account-time")].map((input) => input.value).filter(Boolean);
-    const displayName = card.querySelector(".account-name").value.trim() || `Profile ${index + 1}`;
-    const codexHome = card.dataset.codexHome || undefined;
-    return {
-      id: card.dataset.accountId,
-      displayName,
-      enabled: card.querySelector(".account-enabled").checked,
-      codexHome,
-      message: card.querySelector(".account-message-input").value,
-      schedules,
-      agent: card.querySelector(".account-agent").value,
-      catchupMinutes: clampNumber(card.querySelector(".account-catchup").value, 0, 180, 30),
-      wakePc: card.querySelector(".account-wake").checked,
-    };
+    const profile = structuredClone(card._accountProfile || {});
+    profile.id = card.dataset.accountId;
+    profile.displayName = card.querySelector(".account-name").value.trim() || `Profile ${index + 1}`;
+    profile.enabled = card.querySelector(".account-enabled").checked;
+    profile.agent = card.querySelector(".account-agent").value;
+    profile.stores = Array.isArray(profile.stores) ? profile.stores : [];
+    const storeId = profile.activeStoreId || card.dataset.storeId;
+    const store = profile.stores.find((entry) => entry.id === storeId) || profile.stores[0];
+    if (store) {
+      profile.activeStoreId = store.id;
+      store.message = card.querySelector(".account-message-input").value;
+      store.schedules = [...card.querySelectorAll(".account-time")].map((input) => input.value).filter(Boolean);
+      store.catchupMinutes = clampNumber(card.querySelector(".account-catchup").value, 0, 180, 30);
+      store.wakePc = card.querySelector(".account-wake").checked;
+    }
+    return profile;
   });
 }
 
@@ -360,11 +415,12 @@ async function saveChanges(showSuccess = true) {
   preferences.accounts = accounts;
   config.ping.enabled = preferences.schedulerEnabled;
   const primary = accounts.find((account) => account.enabled) || accounts[0];
-  if (primary) {
+  const primaryStore = activeStoreForProfile(primary);
+  if (primary && primaryStore) {
     config.ping.agent = primary.agent;
-    config.ping.message = primary.message;
-    config.ping.times = [...primary.schedules];
-    config.ping.catchup_minutes = primary.catchupMinutes;
+    config.ping.message = primaryStore.message;
+    config.ping.times = [...primaryStore.schedules];
+    config.ping.catchup_minutes = primaryStore.catchupMinutes;
   }
   const result = await window.automode.save({ config, preferences });
   render(result);
@@ -394,10 +450,12 @@ function applyAuthStatus(status) {
   const button = card?.querySelector(".connect-account");
   const identity = card?.querySelector(".account-auth-identity");
   const meta = card?.querySelector(".account-auth-meta");
-  if (button) button.textContent = status.state === "connected" ? "Reconnect" : "Connect";
+  if (button) button.textContent = "Manage account";
 
   if (status.state === "connected") {
-    el.textContent = status.identityVerified === false ? "CONNECTED · IDENTITY UNKNOWN" : "CONNECTED";
+    el.textContent = status.bindingState && status.bindingState !== "ready"
+      ? "CONNECTED · VERIFYING"
+      : status.identityVerified === false ? "CONNECTED · IDENTITY UNKNOWN" : "CONNECTED";
     el.classList.add("ok");
     if (identity) identity.textContent = status.email || "Actual ChatGPT account";
     if (meta) {
@@ -422,6 +480,18 @@ function applyAuthStatus(status) {
         ? "Code copied to clipboard. Paste it into the browser page."
         : "Waiting for device login to complete…";
     }
+  } else if (status.state === "migration_review") {
+    el.textContent = "MIGRATION REVIEW";
+    el.classList.add("bad");
+    if (meta) meta.textContent = status.detail;
+  } else if (status.state === "account_mismatch") {
+    el.textContent = "ACCOUNT MISMATCH";
+    el.classList.add("bad");
+    if (meta) meta.textContent = status.detail;
+  } else if (status.state === "account_unverified") {
+    el.textContent = "ACCOUNT UNVERIFIED";
+    el.classList.add("bad");
+    if (meta) meta.textContent = status.detail;
   } else if (status.state === "wrong_auth") {
     el.textContent = "NOT CHATGPT AUTH";
     el.classList.add("bad");
@@ -443,9 +513,9 @@ function applyAuthStatus(status) {
   }
 }
 
-async function refreshAuthStatus(accountId) {
+async function refreshAuthStatus(accountId, storeId = null) {
   try {
-    const status = await window.automode.getAccountAuthStatus(accountId);
+    const status = await window.automode.getAccountAuthStatus(accountId, storeId);
     applyAuthStatus(status);
     return status;
   } catch {
@@ -458,46 +528,79 @@ async function refreshAuthStatus(accountId) {
   }
 }
 
-async function pollAuthStatus(accountId) {
+async function pollAuthStatus(accountId, storeId) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const status = await refreshAuthStatus(accountId);
+    const status = await refreshAuthStatus(accountId, storeId);
     if (!status || status.state === "cli_missing") return;
-    if (status.state === "connected" && status.identityVerified !== false) {
-      await refreshTasks({ source: "reconnect", quiet: true });
+    if (status.state === "connected" && status.identityVerified === true) {
+      const activation = await window.automode.activateAccountStore(accountId, storeId);
+      applyAuthStatus(activation.status);
+      if (activation.ok) {
+        render(activation.snapshot);
+        await refreshTasks({ source: "account-change", quiet: true });
+        showBanner("Account verified and activated.");
+      } else {
+        showBanner(activation.status.detail, true);
+      }
       return;
     }
     if (status.state === "connected" && attempt >= 4) return;
   }
 }
 
-async function connectAccount(card) {
+async function startStoreLogin(accountId, storeId) {
+  const status = await window.automode.connectAccount(accountId, storeId);
+  applyAuthStatus(status);
+  showBanner(
+    status.state === "login_started" && status.loginCode
+      ? `Choose the intended ChatGPT account in the browser and enter code ${status.loginCode}.`
+      : status.detail,
+    ["cli_missing", "not_connected", "profile_missing", "store_missing"].includes(status.state),
+  );
+  if (status.state !== "login_started") return;
+  if (status.loginUrl && status.loginCode) {
+    const opened = await window.automode.openExternalLogin(status.loginUrl, status.loginCode);
+    if (opened) showBanner(`Device code ${status.loginCode} copied to clipboard. Paste it into the browser.`);
+    else showBanner("Could not open the Codex device login page or copy its code.", true);
+  }
+  pollAuthStatus(accountId, storeId);
+}
+
+async function manageAccountSelection(card, selectedStoreId) {
   const accountId = card.dataset.accountId;
   const button = card.querySelector(".connect-account");
   button.disabled = true;
   try {
     await saveChanges(false);
-    const status = await window.automode.connectAccount(accountId);
-    applyAuthStatus(status);
-    showBanner(
-      status.state === "login_started" && status.loginCode
-        ? `Choose the intended ChatGPT account in the browser and enter code ${status.loginCode}.`
-        : status.detail,
-      ["cli_missing", "not_connected", "profile_missing"].includes(status.state),
-    );
-    if (status.state === "login_started") {
-      if (status.loginUrl && status.loginCode) {
-        const opened = await window.automode.openExternalLogin(status.loginUrl, status.loginCode);
-        if (opened) {
-          showBanner(`Device code ${status.loginCode} copied to clipboard. Paste it into the browser.`);
-        } else {
-          showBanner("Could not open the Codex device login page or copy its code.", true);
-        }
-      }
-      pollAuthStatus(accountId);
+    let storeId = selectedStoreId;
+    if (storeId === "__new__") {
+      const store = await window.automode.newAccountStore(accountId);
+      storeId = store.id;
     }
+
+    const activation = await window.automode.activateAccountStore(accountId, storeId);
+    applyAuthStatus(activation.status);
+    if (activation.ok) {
+      render(activation.snapshot);
+      await refreshTasks({ source: "account-change", quiet: true });
+      showBanner("Account activated.");
+      return;
+    }
+
+    if (activation.status.storeId && activation.status.storeId !== storeId) {
+      render(activation.snapshot);
+      showBanner(activation.status.detail, true);
+      return;
+    }
+
+    if (["not_connected", "wrong_auth", "account_mismatch", "migration_review"].includes(activation.status.state)) {
+      await startStoreLogin(accountId, storeId);
+      return;
+    }
+    showBanner(activation.status.detail, true);
   } catch (error) {
-    showBanner(`Could not start account login: ${error.message || error}`, true);
+    showBanner(`Could not manage account: ${error.message || error}`, true);
   } finally {
     const current = [...$("account-list").querySelectorAll(".account-card")]
       .find((entry) => entry.dataset.accountId === accountId);
@@ -628,7 +731,8 @@ function activeTaskSchedule(item) {
   if (!item?.accountId) return null;
   return (snapshot?.preferences?.taskResumeSchedules || []).find((schedule) =>
     schedule.enabled
-    && schedule.accountId === item.accountId
+    && schedule.profileId === item.accountId
+    && schedule.storeId === item.storeId
     && schedule.threadId === item.id
   ) || null;
 }
@@ -679,7 +783,7 @@ function renderTaskResumeSchedules(schedules) {
   const filtered = (schedules || []).filter((schedule) => {
     if (taskAccountFilter === 'legacy') return false;
     if (taskAccountFilter === 'all') return true;
-    return schedule.accountId === taskAccountFilter;
+    return schedule.profileId === taskAccountFilter;
   });
 
   if (!filtered.length) {
@@ -739,12 +843,12 @@ function renderTaskResumeSchedules(schedules) {
 }
 
 async function resumeTaskNow(item, button) {
-  if (!item.accountId) return;
+  if (!item.accountId || !item.storeId) return;
   button.disabled = true;
   const original = button.textContent;
   button.textContent = "Running…";
   try {
-    const result = await window.automode.resumeTask(item.accountId, item.id, item.updatedAt);
+    const result = await window.automode.resumeTask(item.accountId, item.storeId, item.id, item.updatedAt);
     const ok = ["completed", "already_running"].includes(result.status);
     showBanner(`${result.status}: ${result.detail}`, !ok);
     await refreshTasks();
@@ -757,7 +861,7 @@ async function resumeTaskNow(item, button) {
 }
 
 async function scheduleTaskAt(item, dateValue) {
-  if (!item.accountId) return;
+  if (!item.accountId || !item.storeId) return;
   const when = new Date(dateValue);
   if (!Number.isFinite(when.getTime())) {
     showBanner("Choose a valid resume date and time.", true);
@@ -766,6 +870,7 @@ async function scheduleTaskAt(item, dateValue) {
   try {
     render(await window.automode.scheduleTaskResume(
       item.accountId,
+      item.storeId,
       item.id,
       item.title,
       when.toISOString(),
@@ -778,12 +883,12 @@ async function scheduleTaskAt(item, dateValue) {
 }
 
 async function scheduleTaskAtReset(item, button) {
-  if (!item.accountId) return;
+  if (!item.accountId || !item.storeId) return;
   button.disabled = true;
   const original = button.textContent;
   button.textContent = "Checking…";
   try {
-    const limits = await window.automode.getAccountRateLimitStatus(item.accountId);
+    const limits = await window.automode.getAccountRateLimitStatus(item.accountId, item.storeId);
     if (!Number.isFinite(limits.suggestedResetAt)) {
       throw new Error("Codex did not provide a future reset timestamp.");
     }
@@ -791,6 +896,7 @@ async function scheduleTaskAtReset(item, button) {
     const when = new Date(limits.suggestedResetAt * 1000 + Math.max(0, graceSeconds) * 1000);
     render(await window.automode.scheduleTaskResume(
       item.accountId,
+      item.storeId,
       item.id,
       item.title,
       when.toISOString(),
