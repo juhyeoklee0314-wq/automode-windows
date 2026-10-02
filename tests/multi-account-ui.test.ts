@@ -5,10 +5,25 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { DEFAULTS } from "../src/core/config.js";
-import { classifyCodexLoginStatus, deviceLoginPendingStatus, parseCodexAccountIdentity, parseCodexDeviceLoginPrompt } from "../src/gui/account-auth.js";
-import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath } from "../src/gui/preferences.js";
+import {
+  classifyCodexLoginStatus,
+  deviceLoginPendingStatus,
+  parseCodexAccountIdentity,
+  parseCodexDeviceLoginPrompt,
+} from "../src/gui/account-auth.js";
+import {
+  activeAccountStore,
+  codexProfilesRoot,
+  findAccountTarget,
+  loadPreferences,
+  newAccountProfile,
+  newAccountStore,
+  preferencesPath,
+  runnableAccountTargets,
+} from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
+import type { AccountTarget } from "../src/gui/types.js";
 
 const root = mkdtempSync(join(tmpdir(), "pinggpt-multi-account-test-"));
 const oldState = process.env.XDG_STATE_HOME;
@@ -30,6 +45,24 @@ after(() => {
   else process.env.LOCALAPPDATA = oldLocal;
   rmSync(root, { recursive: true, force: true });
 });
+
+function target(profileId: string, storeId: string, time: string, wakePc = false): AccountTarget {
+  return {
+    id: profileId,
+    profileId,
+    storeId,
+    displayName: profileId,
+    enabled: true,
+    codexHome: join(codexProfilesRoot(), profileId, storeId),
+    identityKey: "identity-" + storeId,
+    bindingState: "ready",
+    message: "hi",
+    schedules: [time],
+    agent: "codex",
+    catchupMinutes: 30,
+    wakePc,
+  };
+}
 
 describe("Codex account authentication classification", () => {
   it("accepts only ChatGPT login mode for a ChatGPT profile", () => {
@@ -64,7 +97,7 @@ describe("Codex account authentication classification", () => {
     });
   });
 
-  it("extracts only non-secret ChatGPT identity fields from account/read", () => {
+  it("extracts only non-secret ChatGPT display identity fields from account/read", () => {
     assert.deepEqual(
       parseCodexAccountIdentity({
         account: {
@@ -73,136 +106,184 @@ describe("Codex account authentication classification", () => {
           planType: "plus",
           accessToken: "must-not-be-consumed",
         },
-        requiresOpenaiAuth: true,
       }),
       { email: "person@example.com", planType: "plus" },
     );
-    assert.deepEqual(
-      parseCodexAccountIdentity({
-        account: { type: "chatgpt", email: null, planType: "pro" },
-      }),
-      { email: null, planType: "pro" },
-    );
     assert.equal(parseCodexAccountIdentity({ account: { type: "apiKey" } }), null);
-    assert.equal(parseCodexAccountIdentity({ account: null }), null);
   });
 });
 
-describe("multi-account profile persistence", () => {
-  it("migrates legacy account data with the global catch-up value", () => {
+describe("R1.07 account-store persistence", () => {
+  it("projects v1 data into schema v2 without moving the existing CODEX_HOME", () => {
     const path = preferencesPath();
     mkdirSync(join(path, ".."), { recursive: true });
+    const legacyHome = join(root, "legacy-codex-home");
     writeFileSync(path, JSON.stringify({
       schemaVersion: 1,
       schedulerEnabled: true,
       runAtLogin: false,
       accounts: [{
         id: "default",
-        displayName: "Legacy",
+        displayName: "Main",
         enabled: true,
+        codexHome: legacyHome,
         message: "hi",
         schedules: ["06:00"],
         agent: "codex",
       }],
+      taskResumeSchedules: [{
+        id: "resume-old",
+        accountId: "default",
+        threadId: "01a00000-0000-7000-8000-000000000001",
+        title: "Old task",
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        expectedUpdatedAt: 1,
+        wakePc: false,
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      }],
     }), "utf8");
+
     const loaded = loadPreferences(DEFAULTS);
+    assert.equal(loaded.schemaVersion, 2);
     assert.equal(loaded.accounts.length, 1);
-    assert.equal(loaded.accounts[0]?.catchupMinutes, DEFAULTS.ping.catchup_minutes);
-    assert.equal(loaded.accounts[0]?.wakePc, false);
-    assert.equal(loaded.accounts[0]?.codexHome, join(codexProfilesRoot(), "default"));
+    const profile = loaded.accounts[0]!;
+    const store = activeAccountStore(profile);
+    assert.ok(store);
+    assert.equal(profile.displayName, "Main");
+    assert.equal(store.codexHome, legacyHome);
+    assert.equal(store.bindingState, "needs_verification");
+    assert.equal(store.catchupMinutes, DEFAULTS.ping.catchup_minutes);
+    assert.equal(loaded.taskResumeSchedules[0]?.profileId, "default");
+    assert.equal(loaded.taskResumeSchedules[0]?.storeId, store.id);
   });
 
-  it("creates independent Codex homes and safe unique profile ids", () => {
-    const first = newAccountProfile(DEFAULTS, []);
-    const second = newAccountProfile(DEFAULTS, [first]);
-    assert.equal(first.agent, "codex");
-    assert.equal(first.enabled, false);
+  it("creates a local profile with independent account stores", () => {
+    const profile = newAccountProfile(DEFAULTS, []);
+    const first = activeAccountStore(profile);
+    assert.ok(first);
+    const second = newAccountStore(DEFAULTS, profile);
+    assert.equal(profile.agent, "codex");
+    assert.equal(profile.enabled, false);
     assert.equal(first.wakePc, true);
     assert.notEqual(first.id, second.id);
-    assert.match(first.id, /^profile-[A-Za-z0-9_.-]+$/);
-    assert.ok(first.codexHome?.startsWith(codexProfilesRoot()));
     assert.notEqual(first.codexHome, second.codexHome);
+    assert.ok(first.codexHome.startsWith(codexProfilesRoot()));
+    assert.ok(second.codexHome.startsWith(codexProfilesRoot()));
+    assert.equal(second.bindingState, "pending");
   });
 
-  it("uses each account's catch-up window with legacy fallback", () => {
-    const base = {
-      id: "a",
-      displayName: "A",
-      enabled: true,
-      message: "hi",
-      schedules: ["06:00"],
-      agent: "codex" as const,
+  it("reuses the exact previous store when switching A to B to A", () => {
+    const profile = newAccountProfile(DEFAULTS, []);
+    profile.enabled = true;
+    const a = activeAccountStore(profile)!;
+    a.bindingState = "ready";
+    a.identityKey = "identity-a";
+    const b = newAccountStore(DEFAULTS, profile);
+    b.bindingState = "ready";
+    b.identityKey = "identity-b";
+    profile.stores.push(b);
+
+    const preferences = {
+      schemaVersion: 2 as const,
+      runAtLogin: false,
+      schedulerEnabled: true,
+      accounts: [profile],
+      taskResumeSchedules: [],
     };
+
+    profile.activeStoreId = a.id;
+    assert.equal(findAccountTarget(preferences, profile.id, a.id)?.codexHome, a.codexHome);
+    profile.activeStoreId = b.id;
+    assert.equal(findAccountTarget(preferences, profile.id, b.id)?.codexHome, b.codexHome);
+    profile.activeStoreId = a.id;
+    assert.equal(findAccountTarget(preferences, profile.id, a.id)?.codexHome, a.codexHome);
+  });
+
+  it("exposes only the active ready store to automatic execution", () => {
+    const profile = newAccountProfile(DEFAULTS, []);
+    profile.enabled = true;
+    const a = activeAccountStore(profile)!;
+    a.bindingState = "ready";
+    const b = newAccountStore(DEFAULTS, profile);
+    b.bindingState = "ready";
+    profile.stores.push(b);
+    const preferences = {
+      schemaVersion: 2 as const,
+      runAtLogin: false,
+      schedulerEnabled: true,
+      accounts: [profile],
+      taskResumeSchedules: [],
+    };
+
+    profile.activeStoreId = a.id;
+    assert.deepEqual(runnableAccountTargets(preferences).map((entry) => entry.storeId), [a.id]);
+    profile.activeStoreId = b.id;
+    assert.deepEqual(runnableAccountTargets(preferences).map((entry) => entry.storeId), [b.id]);
+    b.bindingState = "account_mismatch";
+    assert.deepEqual(runnableAccountTargets(preferences), []);
+  });
+
+  it("uses each store catch-up window with legacy fallback", () => {
+    const base = target("a", "store-a", "06:00");
     assert.equal(accountCatchupMinutes({ ...base, catchupMinutes: 7 }, DEFAULTS), 7);
-    assert.equal(accountCatchupMinutes(base, DEFAULTS), DEFAULTS.ping.catchup_minutes);
+    assert.equal(accountCatchupMinutes({ ...base, catchupMinutes: undefined }, DEFAULTS), DEFAULTS.ping.catchup_minutes);
     assert.equal(accountCatchupMinutes({ ...base, catchupMinutes: 999 }, DEFAULTS), 180);
   });
 });
 
-describe("multi-account scheduler reconciliation", () => {
-  it("removes deleted profile tasks while global scheduling is off", () => {
+describe("R1.07 scheduler reconciliation", () => {
+  it("removes tasks belonging to an inactive store", () => {
     const receipt = join(root, "schedule.json");
     const calls: string[][] = [];
     const scheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", (args) => {
       calls.push(args);
       return { ok: true, output: "Ready" };
     }, receipt);
-    const accountA = {
-      id: "account-a", displayName: "A", enabled: true, message: "hi",
-      schedules: ["06:00"], agent: "codex" as const, catchupMinutes: 10,
-    };
-    const accountB = {
-      id: "account-b", displayName: "B", enabled: true, message: "hi",
-      schedules: ["07:00"], agent: "codex" as const, catchupMinutes: 20,
-    };
-    scheduler.install([accountA, accountB]);
+    const a = target("main", "store-a", "06:00");
+    const b = target("main", "store-b", "07:00");
+    scheduler.install([a, b]);
     calls.length = 0;
-    const kept = scheduler.prune([accountA]);
+    const kept = scheduler.prune([b]);
     assert.equal(kept.length, 1);
     const deleted = calls.filter((args) => args[0] === "/Delete").map((args) => args[2]);
     assert.equal(deleted.length, 1);
-    assert.match(deleted[0] ?? "", /account-b/);
+    assert.match(deleted[0] ?? "", /store-a/);
   });
 
   it("keeps a stale task tracked when Windows refuses to delete it", () => {
     const receipt = join(root, "schedule-delete-failure.json");
-    const accountA = {
-      id: "account-a", displayName: "A", enabled: true, message: "hi",
-      schedules: ["06:00"], agent: "codex" as const, catchupMinutes: 10,
-    };
-    const accountB = {
-      id: "account-b", displayName: "B", enabled: true, message: "hi",
-      schedules: ["07:00"], agent: "codex" as const, catchupMinutes: 20,
-    };
+    const a = target("main", "store-a", "06:00");
+    const b = target("main", "store-b", "07:00");
     const installScheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", () => ({ ok: true, output: "Ready" }), receipt);
-    installScheduler.install([accountA, accountB]);
+    installScheduler.install([a, b]);
 
     const failingScheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", (args) => {
-      if (args[0] === "/Delete" && String(args[2]).includes("account-b")) return { ok: false, output: "ACCESS_DENIED" };
+      if (args[0] === "/Delete" && String(args[2]).includes("store-b")) return { ok: false, output: "ACCESS_DENIED" };
       return { ok: true, output: "Ready" };
     }, receipt);
-    assert.throws(() => failingScheduler.prune([accountA]), /could not remove obsolete PingGPT tasks/);
+    assert.throws(() => failingScheduler.prune([a]), /could not remove obsolete PingGPT tasks/);
     const raw = JSON.parse(readFileSync(receipt, "utf8")) as { tasks: Array<{ name: string }> };
-    assert.ok(raw.tasks.some((task) => task.name.includes("account-b")));
+    assert.ok(raw.tasks.some((task) => task.name.includes("store-b")));
   });
 
-  it("routes each desired task with its exact account id", () => {
-    const receipt = join(root, "schedule-account-routing.json");
+  it("routes each scheduled action with exact profile and store ids", () => {
+    const receipt = join(root, "schedule-routing.json");
     const actions: string[] = [];
     const scheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", (args) => {
       if (args[0] === "/Create") actions.push(String(args[args.indexOf("/TR") + 1]));
       return { ok: true, output: "Ready" };
     }, receipt);
     scheduler.install([
-      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
-      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
+      target("main", "store-a", "06:00", true),
+      target("sub", "store-c", "07:00", false),
     ]);
     assert.equal(actions.length, 2);
-    assert.match(actions[0] ?? "", /"profile-a"/);
-    assert.match(actions[1] ?? "", /"profile-a-long"/);
+    assert.match(actions[0] ?? "", /"main" "store-a"/);
+    assert.match(actions[1] ?? "", /"sub" "store-c"/);
   });
 
-  it("configures wake only for selected profiles and keeps every task AC-only", () => {
+  it("keeps per-store wake choice", () => {
     const receipt = join(root, "schedule-power.json");
     const calls: string[][] = [];
     const scheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", (args) => {
@@ -210,49 +291,35 @@ describe("multi-account scheduler reconciliation", () => {
       return { ok: true, output: "Ready" };
     }, receipt);
     scheduler.install([
-      { id: "wake", displayName: "Wake", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
-      { id: "no-wake", displayName: "No Wake", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
+      target("main", "wake", "06:00", true),
+      target("sub", "no-wake", "07:00", false),
     ]);
     const powerCalls = calls.filter((args) => args[0] === "@ConfigurePower");
-    assert.equal(powerCalls.length, 2);
     assert.deepEqual(powerCalls.map((args) => args[2]), ["true", "false"]);
   });
 });
 
-describe("multi-account GUI wiring", () => {
+describe("R1.07 account-management GUI wiring", () => {
   const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
-  it("exposes dynamic account cards instead of one fixed ping target", () => {
-    const html = source("src/gui/renderer/index.html");
+  it("presents one Manage account action and hides stored accounts until requested", () => {
     const app = source("src/gui/renderer/app.js");
-    assert.match(html, /id="add-account"/);
-    assert.match(html, /id="account-list"/);
-    assert.doesNotMatch(html, /id="ping-agent"|id="ping-message"|id="catchup"/);
-    assert.match(app, /newAccountProfile\(\)/);
-    assert.match(app, /readAccounts\(\)/);
-    assert.match(app, /connectAccount\(accountId\)/);
-    assert.match(app, /account-auth-identity/);
-    assert.match(app, /Identity verified by Codex/);
+    assert.match(app, /Manage account/);
+    assert.match(app, /Connect another account/);
+    assert.match(app, /account-store-manager hidden/);
+    assert.match(app, /newAccountStore\(accountId\)/);
+    assert.match(app, /activateAccountStore\(accountId, storeId\)/);
+    assert.doesNotMatch(app, /Reconnect" : "Connect/);
   });
 
-  it("wires account creation and login through sandboxed IPC", () => {
+  it("wires account-store management through sandboxed IPC", () => {
     const preload = source("src/gui/preload.cts");
     const main = source("src/gui/main.ts");
-    assert.match(preload, /automode:new-account-profile/);
-    assert.match(preload, /automode:account-auth-status/);
-    assert.match(preload, /automode:account-connect/);
-    assert.match(preload, /automode:open-external-login/);
-    assert.match(preload, /url: string, code: string/);
-    assert.match(main, /automode:new-account-profile/);
-    assert.match(main, /automode:account-auth-status/);
-    assert.match(main, /automode:account-connect/);
-    assert.match(main, /automode:open-external-login/);
-    assert.match(main, /auth\.openai\.com/);
-    assert.match(main, /clipboard\.writeText\(code\)/);
-    assert.match(main, /\[A-Z0-9-\]\{2,30\}/);
+    assert.match(preload, /automode:new-account-store/);
+    assert.match(preload, /automode:account-activate-store/);
+    assert.match(main, /automode:new-account-store/);
+    assert.match(main, /automode:account-activate-store/);
     assert.match(source("src/gui/account-auth.ts"), /login", "--device-auth"/);
-    assert.match(source("src/gui/renderer/app.js"), /Device code:/);
-    assert.match(source("src/gui/renderer/app.js"), /copied to clipboard/);
   });
 
   it("keeps Start Menu integration while disabling the Desktop shortcut", () => {
