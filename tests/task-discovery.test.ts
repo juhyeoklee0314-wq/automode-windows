@@ -160,4 +160,35 @@ describe("task discovery safety boundary", () => {
     assert.match(preload, /automode:get-task-inventory/);
     assert.match(main, /automode:get-task-inventory/);
   });
+
+  it("keeps task account tabs as a view filter instead of an execution authority", () => {
+    const html = source("src/gui/renderer/index.html");
+    const renderer = source("src/gui/renderer/app.js");
+    const styles = source("src/gui/renderer/styles.css");
+
+    assert.match(html, /id="task-account-tabs"/);
+    assert.match(html, /id="task-search"/);
+    assert.match(renderer, /taskAccountFilter/);
+    assert.match(renderer, /addTab\('all', 'All'/);
+    assert.match(renderer, /addTab\('legacy', 'Legacy'/);
+    assert.match(renderer, /window\.automode\.resumeTask\(item\.accountId, item\.id, item\.updatedAt\)/);
+    assert.match(renderer, /window\.automode\.scheduleTaskResume\(\s*item\.accountId,/);
+    assert.doesNotMatch(renderer, /resumeTask\(taskAccountFilter/);
+    assert.doesNotMatch(renderer, /scheduleTaskResume\(\s*taskAccountFilter/);
+    assert.match(styles, /header \{ position:sticky; top:0;/);
+    assert.match(styles, /aside \{ position:fixed;/);
+    assert.match(styles, /\.task-account-tabs\{/);
+  });
+
+  it("sorts and filters task inventory locally without reclassifying ownership", () => {
+    const renderer = source("src/gui/renderer/app.js");
+    assert.match(renderer, /\.filter\(taskMatchesFilter\)/);
+    assert.match(renderer, /\.filter\(taskMatchesSearch\)/);
+    assert.match(renderer, /\.sort\(\(a, b\) => taskTimestamp\(b\) - taskTimestamp\(a\)\)/);
+    assert.match(renderer, /item\.source === 'legacy_global'/);
+    assert.match(renderer, /item\.accountId === taskAccountFilter/);
+    assert.match(renderer, /SCHEDULED/);
+    assert.match(renderer, /RUNNING/);
+    assert.match(renderer, /READY/);
+  });
 });
