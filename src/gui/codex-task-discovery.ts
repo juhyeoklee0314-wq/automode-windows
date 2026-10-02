@@ -509,7 +509,7 @@ async function readSourceIdentity(
   };
 }
 
-function classifyOwnership(
+export function classifyTaskOwnership(
   item: TaskInventoryItem,
   creatorAccountId: string | null,
   identity: SourceIdentity,
@@ -676,11 +676,11 @@ export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<Ta
 
         for (const item of merged.values()) {
           const creatorAccountId = rollout.creatorByThread.get(item.id) ?? null;
-          items.push(classifyOwnership(item, creatorAccountId, listed.identity));
+          items.push(classifyTaskOwnership(item, creatorAccountId, listed.identity));
         }
       } else {
         const listed = await listSource(command, target);
-        items.push(...listed.items.map((item) => classifyOwnership(item, null, listed.identity)));
+        items.push(...listed.items.map((item) => classifyTaskOwnership(item, null, listed.identity)));
       }
     } catch (error) {
       if (target.source === "account") setAccountState(target, emptyIdentity());
