@@ -14,7 +14,9 @@ import { requestWindowsSleep } from "./power-control.js";
 import { recordResume, recordSuspend } from "./power-state.js";
 import { resolveProcessMode } from "./routing.js";
 import { runScheduled, runScheduledDryRun } from "./scheduled-runner.js";
+import { runScheduledTaskResume } from "./scheduled-task-resume.js";
 import { schedulerExecutable, WindowsScheduler } from "./scheduler.js";
+import { TaskResumeScheduler } from "./task-resume-scheduler.js";
 import { GuiService } from "./service.js";
 import { registerQuitHandler } from "./shutdown.js";
 import type { ExitSource } from "./shutdown.js";
@@ -27,7 +29,25 @@ const trace = new DiagnosticTrace();
 const mode = resolveProcessMode(process.argv);
 trace.emit("START_01_MAIN_ENTRY", "main", { execPath: process.execPath, mode: mode.kind, buildIdentity: BUILD_IDENTITY });
 
-if (mode.kind === "scheduled") {
+if (mode.kind === "scheduled-task-resume") {
+  trace.emit("START_02_MODE_ROUTED", "task_resume", { scheduleId: mode.scheduleId });
+  app.whenReady()
+    .then(async () => {
+      const resumeScheduler = new TaskResumeScheduler(schedulerExecutable(process.execPath));
+      const outcome = await runScheduledTaskResume(
+        mode.scheduleId,
+        new Date(),
+        (scheduleId) => resumeScheduler.cancel(scheduleId),
+        {
+          isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
+          getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
+          requestSleep: () => requestWindowsSleep(),
+        },
+      );
+      app.exit(outcome.code);
+    })
+    .catch(() => app.exit(1));
+} else if (mode.kind === "scheduled") {
   trace.emit("START_02_MODE_ROUTED", "scheduled");
   app.whenReady()
     .then(() => runScheduled(mode.accountId, mode.scheduleId, new Date(), trace, {
@@ -73,7 +93,12 @@ function startGui(): void {
     undefined,
     diagnosticStartup ? DIAGNOSTIC_RECEIPT_PATH() : undefined,
   );
-  const service = new GuiService(scheduler, app.getVersion(), trace);
+  const taskResumeScheduler = new TaskResumeScheduler(
+    schedulerTarget,
+    undefined,
+    diagnosticStartup ? join(tmpdir(), "automode-phase6-diagnostic", trace.runId, "task-resume-schedule.json") : undefined,
+  );
+  const service = new GuiService(scheduler, taskResumeScheduler, app.getVersion(), trace);
   trace.emit("BUILD_IDENTITY", "main", {
     appVersion: app.getVersion(), packaged: app.isPackaged, diagnosticStartup,
     schedulerTarget, portable: Boolean(process.env.PORTABLE_EXECUTABLE_FILE),
@@ -221,6 +246,11 @@ function startGui(): void {
         args: ["--background"],
       });
     }
+    try {
+      taskResumeScheduler.sync(preferences.taskResumeSchedules);
+    } catch {
+      trace.emit("TASK_RESUME_SCHEDULER_SYNC_FAILED", "main");
+    }
     if (preferences.schedulerEnabled) {
       try {
         scheduler.install(preferences.accounts);
@@ -239,6 +269,31 @@ function startGui(): void {
     }
 
     ipcMain.handle("automode:get-snapshot", () => service.snapshot());
+    ipcMain.handle("automode:get-task-inventory", () => service.taskInventory());
+    ipcMain.handle("automode:resume-task", (_event, accountId: unknown, threadId: unknown, expectedUpdatedAt: unknown) =>
+      service.resumeTask(
+        String(accountId ?? ""),
+        String(threadId ?? ""),
+        typeof expectedUpdatedAt === "number" ? expectedUpdatedAt : null,
+      ));
+    ipcMain.handle("automode:schedule-task-resume", (
+      _event,
+      accountId: unknown,
+      threadId: unknown,
+      title: unknown,
+      runAt: unknown,
+      expectedUpdatedAt: unknown,
+    ) => service.scheduleTaskResume(
+      String(accountId ?? ""),
+      String(threadId ?? ""),
+      String(title ?? ""),
+      String(runAt ?? ""),
+      typeof expectedUpdatedAt === "number" ? expectedUpdatedAt : null,
+    ));
+    ipcMain.handle("automode:cancel-task-resume", (_event, scheduleId: unknown) =>
+      service.cancelTaskResumeSchedule(String(scheduleId ?? "")));
+    ipcMain.handle("automode:account-rate-limit-status", (_event, accountId: unknown) =>
+      service.getAccountRateLimitStatus(String(accountId ?? "")));
     ipcMain.handle("automode:save", (_event, payload: SavePayload) => service.save(payload));
     ipcMain.handle("automode:set-scheduler", (_event, enabled: boolean) => service.setScheduler(Boolean(enabled)));
     ipcMain.handle("automode:set-login", (_event, enabled: boolean) => setRunAtLogin(Boolean(enabled)));

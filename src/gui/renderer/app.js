@@ -1,5 +1,9 @@
 const $ = (id) => document.getElementById(id);
 let snapshot;
+let taskInventorySnapshot = null;
+let taskAccountFilter = 'all';
+let automationAccountFilter = 'all';
+let taskSearchQuery = '';
 
 function showBanner(message, error = false) {
   const el = $("banner");
@@ -48,6 +52,9 @@ function render(data) {
     $(`${agent}-badge`).classList.toggle("ok", Boolean(found));
   }
   renderAccounts(p.accounts);
+  renderAutomationAccountTabs(p.accounts);
+  renderTaskResumeSchedules(p.taskResumeSchedules || []);
+  if (taskInventorySnapshot) renderTaskInventory(taskInventorySnapshot);
   const tasks = $("task-list");
   tasks.replaceChildren();
   if (!data.scheduler.length) tasks.innerHTML = '<p class="muted">No GUI scheduler tasks installed.</p>';
@@ -85,6 +92,7 @@ function accountCard(account, saved = true) {
   nameInput.type = "text";
   nameInput.maxLength = 80;
   nameInput.value = account.displayName;
+  nameInput.oninput = () => refreshAutomationTabLabels();
   nameLabel.append(nameInput);
 
   const enableWrap = document.createElement("div");
@@ -106,8 +114,11 @@ function accountCard(account, saved = true) {
   deleteButton.className = "remove small delete-account";
   deleteButton.textContent = "Delete";
   deleteButton.onclick = () => {
+    const removedId = card.dataset.accountId;
     card.remove();
+    if (automationAccountFilter === removedId) automationAccountFilter = "all";
     ensureEmptyAccountsMessage();
+    refreshAutomationTabLabels();
     showBanner("Profile removed from the draft. Save changes to apply.");
   };
 
@@ -260,6 +271,64 @@ function renderAccounts(accounts) {
   });
 }
 
+function automationProfileName(account) {
+  return String(account?.displayName || account?.id || "Profile");
+}
+
+function applyAutomationAccountFilter() {
+  const cards = [...$("account-list").querySelectorAll(".account-card")];
+  for (const card of cards) {
+    const visible = automationAccountFilter === "all" || card.dataset.accountId === automationAccountFilter;
+    card.classList.toggle("account-filter-hidden", !visible);
+  }
+}
+
+function renderAutomationAccountTabs(accounts = snapshot?.preferences?.accounts || []) {
+  const root = $("automation-account-tabs");
+  if (!root) return;
+
+  const valid = new Set(["all", ...accounts.map((account) => account.id)]);
+  if (!valid.has(automationAccountFilter)) automationAccountFilter = "all";
+
+  root.replaceChildren();
+
+  const addTab = (id, label, count = null) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "task-account-tab" + (automationAccountFilter === id ? " active" : "");
+    button.dataset.automationFilter = id;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", automationAccountFilter === id ? "true" : "false");
+
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.append(text);
+
+    if (count !== null) {
+      const badge = document.createElement("span");
+      badge.className = "count";
+      badge.textContent = String(count);
+      button.append(badge);
+    }
+
+    button.onclick = () => {
+      automationAccountFilter = id;
+      renderAutomationAccountTabs(readAccounts());
+      applyAutomationAccountFilter();
+    };
+    root.append(button);
+  };
+
+  addTab("all", "All", accounts.length);
+  for (const account of accounts) addTab(account.id, automationProfileName(account));
+
+  applyAutomationAccountFilter();
+}
+
+function refreshAutomationTabLabels() {
+  renderAutomationAccountTabs(readAccounts());
+}
+
 function readAccounts() {
   return [...$("account-list").querySelectorAll(".account-card")].map((card, index) => {
     const schedules = [...card.querySelectorAll(".account-time")].map((input) => input.value).filter(Boolean);
@@ -394,7 +463,10 @@ async function pollAuthStatus(accountId) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const status = await refreshAuthStatus(accountId);
     if (!status || status.state === "cli_missing") return;
-    if (status.state === "connected" && status.identityVerified !== false) return;
+    if (status.state === "connected" && status.identityVerified !== false) {
+      await refreshTasks({ source: "reconnect", quiet: true });
+      return;
+    }
     if (status.state === "connected" && attempt >= 4) return;
   }
 }
@@ -434,12 +506,496 @@ async function connectAccount(card) {
   }
 }
 
-document.querySelectorAll(".nav").forEach((button) => button.onclick = () => {
-  document.querySelectorAll(".nav,.page").forEach((el) => el.classList.remove("active"));
-  button.classList.add("active");
-  $(`page-${button.dataset.page}`).classList.add("active");
-  $("page-title").textContent = button.textContent;
-  if (button.dataset.page === "logs") refreshLog();
+function formatTaskTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "Unknown time";
+  return new Date(seconds * 1000).toLocaleString();
+}
+
+function defaultTaskScheduleValue() {
+  const date = new Date(Date.now() + 5 * 60 * 1000);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function taskTimestamp(item) {
+  const value = item?.recencyAt ?? item?.updatedAt ?? item?.createdAt;
+  return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function taskFilterOptions(data) {
+  const counts = new Map();
+  for (const item of data.items || []) {
+    if (item.source === 'account' && item.accountId) {
+      counts.set(item.accountId, (counts.get(item.accountId) || 0) + 1);
+    }
+  }
+
+  const accountStates = new Map((data.accounts || []).map((state) => [state.accountId, state]));
+  const configured = (snapshot?.preferences?.accounts || [])
+    .filter((account) => account.agent === 'codex' && account.enabled !== false)
+    .map((account) => {
+      return {
+        id: account.id,
+        label: account.displayName || account.id,
+        count: counts.get(account.id) || 0,
+      };
+    });
+
+  for (const item of data.items || []) {
+    if (item.source !== 'account' || !item.accountId) continue;
+    if (configured.some((account) => account.id === item.accountId)) continue;
+    configured.push({
+      id: item.accountId,
+      label: item.accountLabel || item.accountId,
+      count: counts.get(item.accountId) || 0,
+    });
+  }
+
+  return {
+    accounts: configured,
+    legacyCount: (data.items || []).filter((item) => item.source === 'legacy_global').length,
+    total: (data.items || []).length,
+  };
+}
+
+function renderTaskAccountTabs(data) {
+  const root = $('task-account-tabs');
+  if (!root) return;
+  const options = taskFilterOptions(data);
+  const validFilters = new Set(['all', 'legacy', ...options.accounts.map((account) => account.id)]);
+  if (!validFilters.has(taskAccountFilter)) taskAccountFilter = 'all';
+
+  root.replaceChildren();
+
+  const addTab = (id, label, count, legacy = false) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'task-account-tab'
+      + (legacy ? ' legacy-tab' : '')
+      + (taskAccountFilter === id ? ' active' : '');
+    button.dataset.taskFilter = id;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', taskAccountFilter === id ? 'true' : 'false');
+
+    const text = document.createElement('span');
+    text.textContent = label;
+    const badge = document.createElement('span');
+    badge.className = 'count';
+    badge.textContent = String(count);
+    button.append(text, badge);
+
+    button.onclick = () => {
+      taskAccountFilter = id;
+      renderTaskInventory(taskInventorySnapshot || data);
+      renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
+    };
+    root.append(button);
+  };
+
+  addTab('all', 'All', options.total);
+  options.accounts.forEach((account) => addTab(account.id, account.label, account.count));
+  addTab('legacy', 'Legacy', options.legacyCount, true);
+}
+
+function taskMatchesFilter(item) {
+  if (taskAccountFilter === 'legacy') return item.source === 'legacy_global';
+  if (taskAccountFilter !== 'all') return item.source === 'account' && item.accountId === taskAccountFilter;
+  return true;
+}
+
+function inventoryAccountState(accountId) {
+  if (!accountId) return null;
+  return (taskInventorySnapshot?.accounts || []).find((state) => state.accountId === accountId) || null;
+}
+
+function taskMatchesSearch(item) {
+  const query = taskSearchQuery.trim().toLowerCase();
+  if (!query) return true;
+  const accountState = inventoryAccountState(item.accountId);
+  return [
+    item.title,
+    item.preview,
+    item.cwd,
+    item.accountLabel,
+    accountState?.connectedEmail,
+    item.model,
+    item.sessionSource,
+    item.ownershipStatus,
+  ].filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+}
+
+function activeTaskSchedule(item) {
+  if (!item?.accountId) return null;
+  return (snapshot?.preferences?.taskResumeSchedules || []).find((schedule) =>
+    schedule.enabled
+    && schedule.accountId === item.accountId
+    && schedule.threadId === item.id
+  ) || null;
+}
+
+function taskState(item) {
+  if (item.source === 'legacy_global') return { label: 'LEGACY', className: '' };
+  if (item.ownershipStatus === 'mismatch') {
+    return {
+      label: 'ACCOUNT MISMATCH',
+      className: 'mismatch',
+      title: 'This task was created by a different ChatGPT account than the account currently connected to this PingGPT profile.',
+    };
+  }
+  if (item.ownershipStatus !== 'matched') {
+    return {
+      label: 'OWNERSHIP UNVERIFIED',
+      className: 'unverified',
+      title: 'PingGPT could not verify that the connected ChatGPT account created this task.',
+    };
+  }
+  const scheduled = activeTaskSchedule(item);
+  if (scheduled) {
+    return {
+      label: 'SCHEDULED',
+      className: 'scheduled',
+      title: new Date(scheduled.runAt).toLocaleString(),
+    };
+  }
+  const status = String(item.status || '').toLowerCase();
+  if (status.includes('active') || status.includes('running') || status.includes('inprogress')) {
+    return { label: 'RUNNING', className: 'running' };
+  }
+  return { label: 'READY', className: 'ready' };
+}
+
+function syncAccountFilterHeader(page) {
+  const taskTabs = $('task-account-tabs');
+  const automationTabs = $('automation-account-tabs');
+  if (taskTabs) taskTabs.classList.toggle('hidden', page !== 'tasks');
+  if (automationTabs) automationTabs.classList.toggle('hidden', page !== 'automation');
+}
+
+function renderTaskResumeSchedules(schedules) {
+  const root = $('task-resume-schedule-list');
+  if (!root) return;
+  root.replaceChildren();
+
+  const filtered = (schedules || []).filter((schedule) => {
+    if (taskAccountFilter === 'legacy') return false;
+    if (taskAccountFilter === 'all') return true;
+    return schedule.accountId === taskAccountFilter;
+  });
+
+  if (!filtered.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = taskAccountFilter === 'all'
+      ? 'No task resumes are scheduled.'
+      : 'No task resumes are scheduled for this account filter.';
+    root.append(empty);
+    return;
+  }
+
+  filtered
+    .slice()
+    .sort((a, b) => new Date(a.runAt).getTime() - new Date(b.runAt).getTime())
+    .forEach((schedule) => {
+      const row = document.createElement('div');
+      row.className = 'task-resume-schedule';
+
+      const copy = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = schedule.title || 'Codex task';
+      const meta = document.createElement('small');
+      const account = snapshot?.preferences?.accounts?.find((entry) => entry.id === schedule.accountId);
+      meta.textContent = [
+        account?.displayName || schedule.accountId,
+        new Date(schedule.runAt).toLocaleString(),
+      ].join(' · ');
+      copy.append(title, meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'task-resume-schedule-actions';
+      const state = document.createElement('span');
+      state.className = 'badge ' + (schedule.enabled ? 'scheduled' : 'finished');
+      state.textContent = schedule.enabled
+        ? 'SCHEDULED'
+        : String(schedule.lastStatus || 'FINISHED').toUpperCase();
+
+      const cancel = document.createElement('button');
+      cancel.className = 'remove small';
+      cancel.textContent = schedule.enabled ? 'Cancel' : 'Remove';
+      cancel.onclick = async () => {
+        cancel.disabled = true;
+        try {
+          render(await window.automode.cancelTaskResumeSchedule(schedule.id));
+          showBanner('Task resume schedule removed.');
+        } catch (error) {
+          showBanner('Could not remove task resume schedule: ' + (error.message || error), true);
+          cancel.disabled = false;
+        }
+      };
+
+      actions.append(state, cancel);
+      row.append(copy, actions);
+      root.append(row);
+    });
+}
+
+async function resumeTaskNow(item, button) {
+  if (!item.accountId) return;
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = "Running…";
+  try {
+    const result = await window.automode.resumeTask(item.accountId, item.id, item.updatedAt);
+    const ok = ["completed", "already_running"].includes(result.status);
+    showBanner(`${result.status}: ${result.detail}`, !ok);
+    await refreshTasks();
+  } catch (error) {
+    showBanner(`Could not resume task: ${error.message || error}`, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function scheduleTaskAt(item, dateValue) {
+  if (!item.accountId) return;
+  const when = new Date(dateValue);
+  if (!Number.isFinite(when.getTime())) {
+    showBanner("Choose a valid resume date and time.", true);
+    return;
+  }
+  try {
+    render(await window.automode.scheduleTaskResume(
+      item.accountId,
+      item.id,
+      item.title,
+      when.toISOString(),
+      item.updatedAt,
+    ));
+    showBanner(`Task resume scheduled for ${when.toLocaleString()}.`);
+  } catch (error) {
+    showBanner(`Could not schedule task resume: ${error.message || error}`, true);
+  }
+}
+
+async function scheduleTaskAtReset(item, button) {
+  if (!item.accountId) return;
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = "Checking…";
+  try {
+    const limits = await window.automode.getAccountRateLimitStatus(item.accountId);
+    if (!Number.isFinite(limits.suggestedResetAt)) {
+      throw new Error("Codex did not provide a future reset timestamp.");
+    }
+    const graceSeconds = Number(snapshot?.config?.grace_seconds ?? 60);
+    const when = new Date(limits.suggestedResetAt * 1000 + Math.max(0, graceSeconds) * 1000);
+    render(await window.automode.scheduleTaskResume(
+      item.accountId,
+      item.id,
+      item.title,
+      when.toISOString(),
+      item.updatedAt,
+    ));
+    showBanner(`Task resume scheduled for limit reset + grace: ${when.toLocaleString()}.`);
+  } catch (error) {
+    showBanner(`Could not schedule at reset: ${error.message || error}`, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+function renderTaskInventory(data) {
+  taskInventorySnapshot = data;
+  renderTaskAccountTabs(data);
+
+  const root = $('codex-task-list');
+  const summary = $('task-inventory-summary');
+  root.replaceChildren();
+
+  const accountCount = data.items.filter((item) => item.source === 'account').length;
+  const legacyCount = data.items.filter((item) => item.source === 'legacy_global').length;
+  const errorCount = data.errors.length;
+  const filteredItems = data.items
+    .filter(taskMatchesFilter)
+    .filter(taskMatchesSearch)
+    .slice()
+    .sort((a, b) => taskTimestamp(b) - taskTimestamp(a));
+
+  let filterLabel = null;
+  if (taskAccountFilter === 'legacy') {
+    filterLabel = 'Legacy';
+  } else if (taskAccountFilter !== 'all') {
+    filterLabel = (snapshot?.preferences?.accounts || [])
+      .find((account) => account.id === taskAccountFilter)?.displayName || taskAccountFilter;
+  }
+
+  summary.textContent = [
+    accountCount + ' account task' + (accountCount === 1 ? '' : 's'),
+    legacyCount + ' legacy task' + (legacyCount === 1 ? '' : 's'),
+    filterLabel
+      ? 'showing ' + filteredItems.length + ' for ' + filterLabel
+      : (taskSearchQuery ? 'showing ' + filteredItems.length + ' matches' : null),
+    errorCount ? errorCount + ' source error' + (errorCount === 1 ? '' : 's') : null,
+  ].filter(Boolean).join(' · ');
+
+  if (!filteredItems.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = data.items.length
+      ? 'No tasks match the current account filter or search.'
+      : errorCount
+        ? 'No tasks could be loaded from the available Codex stores.'
+        : 'No Codex tasks were found.';
+    root.append(empty);
+  }
+
+  filteredItems.forEach((item) => {
+    const row = document.createElement('div');
+    const ownershipClass = item.source === 'legacy_global'
+      ? 'legacy'
+      : item.ownershipStatus === 'mismatch'
+        ? 'mismatch'
+        : item.ownershipStatus === 'matched'
+          ? 'owned'
+          : 'unverified';
+    row.className = 'codex-task-row ' + ownershipClass;
+
+    const copy = document.createElement('div');
+    copy.className = 'codex-task-copy';
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const meta = document.createElement('small');
+    const accountState = inventoryAccountState(item.accountId);
+    const connectedLabel = item.source === 'account'
+      ? (accountState?.connectedEmail
+        || (accountState?.identityVerified ? 'Connected account verified' : 'Connected identity unavailable'))
+      : null;
+    meta.textContent = [
+      item.source === 'account' ? 'Stored in ' + item.accountLabel : item.accountLabel,
+      connectedLabel ? 'Connected: ' + connectedLabel : null,
+      item.model,
+      item.sessionSource,
+      formatTaskTime(taskTimestamp(item)),
+    ].filter(Boolean).join(' · ');
+    const cwd = document.createElement('small');
+    cwd.className = 'codex-task-cwd';
+    cwd.textContent = item.cwd || 'Working directory unavailable';
+    copy.append(title, meta, cwd);
+
+    const actions = document.createElement('div');
+    actions.className = 'codex-task-actions';
+
+    const ownership = document.createElement('span');
+    ownership.className = 'badge ' + (item.source === 'account' ? 'profile' : '');
+    ownership.textContent = item.source === 'account' ? 'PROFILE TASK' : 'LEGACY / GLOBAL';
+
+    const operational = taskState(item);
+    const operationalBadge = document.createElement('span');
+    operationalBadge.className = 'badge ' + operational.className;
+    operationalBadge.textContent = operational.label;
+    if (operational.title) operationalBadge.title = operational.title;
+
+    actions.append(ownership, operationalBadge);
+
+    if (item.resumeEligibility === 'same_profile_candidate' && item.accountId) {
+      const resume = document.createElement('button');
+      resume.className = 'secondary small';
+      resume.textContent = 'Resume now';
+      resume.onclick = () => resumeTaskNow(item, resume);
+
+      const scheduleWrap = document.createElement('div');
+      scheduleWrap.className = 'task-resume-controls';
+      const when = document.createElement('input');
+      when.type = 'datetime-local';
+      when.className = 'task-resume-time';
+      when.value = defaultTaskScheduleValue();
+
+      const schedule = document.createElement('button');
+      schedule.className = 'secondary small';
+      schedule.textContent = 'Schedule';
+      schedule.onclick = () => scheduleTaskAt(item, when.value);
+
+      const reset = document.createElement('button');
+      reset.className = 'secondary small';
+      reset.textContent = 'At reset';
+      reset.title = 'Use the selected account current Codex rate-limit reset time plus the configured grace period.';
+      reset.onclick = () => scheduleTaskAtReset(item, reset);
+
+      scheduleWrap.append(when, schedule, reset);
+      actions.append(resume, scheduleWrap);
+    } else {
+      const disabled = document.createElement('button');
+      disabled.className = 'secondary small';
+      disabled.disabled = true;
+      if (item.resumeEligibility === 'account_mismatch') {
+        disabled.textContent = 'Reconnect matching account';
+        disabled.title = 'The task creator does not match the ChatGPT account currently connected to this PingGPT profile.';
+      } else if (item.resumeEligibility === 'ownership_unverified') {
+        disabled.textContent = 'Ownership unverified';
+        disabled.title = 'PingGPT could not verify task ownership, so resume and scheduling are disabled.';
+      } else {
+        disabled.textContent = 'Cross-account unavailable';
+        disabled.title = 'Legacy / Global tasks cannot be resumed through an isolated account store.';
+      }
+      actions.append(disabled);
+    }
+
+    row.append(copy, actions);
+    root.append(row);
+  });
+
+  data.errors
+    .filter((entry) => taskAccountFilter === 'all'
+      || (taskAccountFilter === 'legacy' && entry.source === 'legacy_global')
+      || entry.accountId === taskAccountFilter)
+    .forEach((entry) => {
+      const error = document.createElement('div');
+      error.className = 'task-source-error';
+      const title = document.createElement('strong');
+      title.textContent = entry.accountLabel;
+      const detail = document.createElement('small');
+      detail.textContent = entry.detail;
+      error.append(title, detail);
+      root.append(error);
+    });
+
+  renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
+}
+
+async function refreshTasks(options = {}) {
+  const button = $("refresh-tasks");
+  const summary = $("task-inventory-summary");
+  const quiet = options.quiet === true;
+  if (button) button.disabled = true;
+  if (summary) summary.textContent = "Reading fresh Codex task and account state…";
+  try {
+    const data = await window.automode.getTaskInventory();
+    renderTaskInventory(data);
+    renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
+    if (!quiet && options.source === "manual") {
+      showBanner("Tasks and connected account state refreshed.");
+    }
+    return data;
+  } catch (error) {
+    $("codex-task-list").replaceChildren();
+    if (summary) summary.textContent = "Task inventory failed.";
+    if (!quiet) showBanner(`Could not load tasks: ${error.message || error}`, true);
+    return null;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+document.querySelectorAll('.nav').forEach((button) => button.onclick = () => {
+  document.querySelectorAll('.nav,.page').forEach((el) => el.classList.remove('active'));
+  button.classList.add('active');
+  $('page-' + button.dataset.page).classList.add('active');
+  $('page-title').textContent = button.textContent;
+  syncAccountFilterHeader(button.dataset.page);
+  if (button.dataset.page === 'logs') refreshLog();
+  if (button.dataset.page === 'tasks') refreshTasks({ source: "page-open", quiet: true });
+  if (button.dataset.page === 'automation') renderAutomationAccountTabs(readAccounts());
 });
 
 $("add-account").onclick = async () => {
@@ -451,6 +1007,7 @@ $("add-account").onclick = async () => {
     account.displayName = `GPT Account ${currentCount + 1}`;
     $("account-list").append(accountCard(account, false));
     ensureEmptyAccountsMessage();
+    renderAutomationAccountTabs(readAccounts());
     showBanner("Account profile added. Save changes or press Connect to save and start login.");
   } catch (error) {
     showBanner(`Could not add account: ${error.message || error}`, true);
@@ -516,11 +1073,18 @@ $("export-diagnostic").onclick = async () => {
     button.textContent = "진단 로그 저장";
   }
 };
+$("refresh-tasks").onclick = () => refreshTasks({ source: "manual" });
+$("task-search").oninput = (event) => {
+  taskSearchQuery = String(event.target.value || '');
+  if (taskInventorySnapshot) renderTaskInventory(taskInventorySnapshot);
+};
+
 async function refreshLog() { $("log-content").textContent = await window.automode.readLog(); }
 $("refresh-log").onclick = refreshLog;
 $("open-log").onclick = () => window.automode.openLogFolder();
 
 window.addEventListener("error", () => window.automode.rendererEvent("RENDERER_ERROR"));
 window.addEventListener("unhandledrejection", () => window.automode.rendererEvent("RENDERER_UNHANDLED_REJECTION"));
-window.automode.getSnapshot().then(render).catch((error) => showBanner(`Startup failed: ${error.message || error}`, true));
+syncAccountFilterHeader(document.querySelector('.nav.active')?.dataset.page || 'overview');
+window.automode.getSnapshot().then(render).catch((error) => showBanner('Startup failed: ' + (error.message || error), true));
 window.automode.rendererReady();

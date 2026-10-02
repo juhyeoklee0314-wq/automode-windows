@@ -25,11 +25,26 @@ export interface AccountAuthStatus {
   loginCode?: string;
 }
 
+export interface TaskResumeSchedule {
+  id: string;
+  accountId: string;
+  threadId: string;
+  title: string;
+  runAt: string;
+  expectedUpdatedAt: number | null;
+  wakePc: boolean;
+  enabled: boolean;
+  createdAt: string;
+  completedAt?: string | null;
+  lastStatus?: TaskResumeResult["status"] | null;
+}
+
 export interface GuiPreferences {
   schemaVersion: 1;
   runAtLogin: boolean;
   schedulerEnabled: boolean;
   accounts: AccountProfile[];
+  taskResumeSchedules: TaskResumeSchedule[];
 }
 
 export interface SchedulerTaskStatus {
@@ -38,6 +53,85 @@ export interface SchedulerTaskStatus {
   time: string;
   installed: boolean;
   enabled: boolean;
+}
+
+export type TaskInventorySource = "account" | "legacy_global";
+export type TaskOwnershipStatus = "matched" | "mismatch" | "unverified" | "legacy";
+export type TaskResumeEligibility =
+  | "same_profile_candidate"
+  | "account_mismatch"
+  | "ownership_unverified"
+  | "legacy_unassigned";
+
+export interface TaskInventoryAccountState {
+  accountId: string;
+  accountLabel: string;
+  connectedEmail: string | null;
+  planType: string | null;
+  identityVerified: boolean;
+}
+
+export interface TaskInventoryItem {
+  id: string;
+  source: TaskInventorySource;
+  accountId: string | null;
+  accountLabel: string;
+  title: string;
+  preview: string;
+  cwd: string | null;
+  model: string | null;
+  modelProvider: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  recencyAt: number | null;
+  status: string;
+  historyMode: string;
+  sessionSource: string;
+  originator: string | null;
+  ownershipStatus: TaskOwnershipStatus;
+  resumeEligibility: TaskResumeEligibility;
+}
+
+export interface TaskInventorySourceError {
+  source: TaskInventorySource;
+  accountId: string | null;
+  accountLabel: string;
+  detail: string;
+}
+
+export interface TaskInventorySnapshot {
+  generatedAt: string;
+  items: TaskInventoryItem[];
+  errors: TaskInventorySourceError[];
+  accounts: TaskInventoryAccountState[];
+}
+
+export type TaskResumeAction = "wait" | "continue" | "replay" | "abort";
+export type TaskResumeStatus =
+  | "completed"
+  | "already_running"
+  | "history_changed"
+  | "turn_failed"
+  | "rejected"
+  | "error";
+
+export interface TaskResumeResult {
+  accountId: string;
+  threadId: string;
+  action: TaskResumeAction;
+  status: TaskResumeStatus;
+  detail: string;
+  turnId: string | null;
+}
+
+export interface AccountRateLimitStatus {
+  accountId: string;
+  ordinaryUsageAllowed: boolean | null;
+  primaryUsedPercent: number | null;
+  primaryResetsAt: number | null;
+  secondaryUsedPercent: number | null;
+  secondaryResetsAt: number | null;
+  suggestedResetAt: number | null;
 }
 
 export interface AppSnapshot {
@@ -73,6 +167,11 @@ export interface DiagnosticExportResult {
 
 export interface AutomodeApi {
   getSnapshot(): Promise<AppSnapshot>;
+  getTaskInventory(): Promise<TaskInventorySnapshot>;
+  resumeTask(accountId: string, threadId: string, expectedUpdatedAt: number | null): Promise<TaskResumeResult>;
+  scheduleTaskResume(accountId: string, threadId: string, title: string, runAt: string, expectedUpdatedAt: number | null): Promise<AppSnapshot>;
+  cancelTaskResumeSchedule(scheduleId: string): Promise<AppSnapshot>;
+  getAccountRateLimitStatus(accountId: string): Promise<AccountRateLimitStatus>;
   save(payload: SavePayload): Promise<AppSnapshot>;
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;

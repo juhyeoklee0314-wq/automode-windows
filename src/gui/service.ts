@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import * as detect from "../agents/detect.js";
@@ -7,10 +8,13 @@ import * as configmod from "../core/config.js";
 import { redactSecrets } from "../core/redact.js";
 import { nextOccurrence, parseHhmm, resolveTz } from "../core/timeutil.js";
 import { codexAuthStatus, startCodexLogin } from "./account-auth.js";
+import { discoverCodexTasks } from "./codex-task-discovery.js";
+import { readAccountRateLimitStatus, resumeCodexTask } from "./codex-task-runtime.js";
 import { leaseIsLive, writeLease } from "./lease.js";
 import { loadPreferences, newAccountProfile as createAccountProfile, savePreferences } from "./preferences.js";
 import { WindowsScheduler } from "./scheduler.js";
-import type { AccountAuthStatus, AccountProfile, AppSnapshot, DoctorCheck, GuiPreferences, SavePayload } from "./types.js";
+import { TaskResumeScheduler } from "./task-resume-scheduler.js";
+import type { AccountAuthStatus, AccountProfile, AccountRateLimitStatus, AppSnapshot, DoctorCheck, GuiPreferences, SavePayload, TaskInventorySnapshot, TaskResumeResult } from "./types.js";
 import { BUILD_IDENTITY } from "./diagnostics.js";
 import type { DiagnosticTrace } from "./diagnostics.js";
 
@@ -34,6 +38,7 @@ function missingProfileStatus(accountId: string): AccountAuthStatus {
 export class GuiService {
   constructor(
     private readonly scheduler: WindowsScheduler,
+    private readonly taskResumeScheduler: TaskResumeScheduler,
     private readonly version: string,
     private readonly trace?: DiagnosticTrace,
   ) {}
@@ -75,7 +80,15 @@ export class GuiService {
       payload.config.ping.catchup_minutes = primary.catchupMinutes ?? payload.config.ping.catchup_minutes;
     }
     configmod.save(payload.config);
+    const resumableAccounts = new Set(
+      payload.preferences.accounts
+        .filter((account) => account.enabled && account.agent === "codex" && Boolean(account.codexHome))
+        .map((account) => account.id),
+    );
+    payload.preferences.taskResumeSchedules = payload.preferences.taskResumeSchedules
+      .filter((schedule) => resumableAccounts.has(schedule.accountId));
     savePreferences(payload.preferences);
+    this.taskResumeScheduler.sync(payload.preferences.taskResumeSchedules);
     if (payload.preferences.schedulerEnabled) {
       this.scheduler.install(payload.preferences.accounts);
       writeLease(true);
@@ -106,6 +119,98 @@ export class GuiService {
     const config = configmod.load();
     const preferences = loadPreferences(config);
     return createAccountProfile(config, preferences.accounts);
+  }
+
+  async taskInventory(): Promise<TaskInventorySnapshot> {
+    const config = configmod.load();
+    const preferences = loadPreferences(config);
+    return await discoverCodexTasks(preferences.accounts);
+  }
+
+  async resumeTask(accountId: string, threadId: string, expectedUpdatedAt: number | null): Promise<TaskResumeResult> {
+    const preferences = loadPreferences(configmod.load());
+    const account = preferences.accounts.find((entry) =>
+      entry.id === accountId && entry.enabled && entry.agent === "codex" && Boolean(entry.codexHome));
+    if (!account) {
+      return {
+        accountId,
+        threadId,
+        action: "abort",
+        status: "rejected",
+        detail: "The selected Codex account profile is unavailable or disabled.",
+        turnId: null,
+      };
+    }
+    return await resumeCodexTask(account, threadId, expectedUpdatedAt);
+  }
+
+  async getAccountRateLimitStatus(accountId: string): Promise<AccountRateLimitStatus> {
+    const preferences = loadPreferences(configmod.load());
+    const account = preferences.accounts.find((entry) =>
+      entry.id === accountId && entry.enabled && entry.agent === "codex" && Boolean(entry.codexHome));
+    if (!account) throw new Error("The selected Codex account profile is unavailable or disabled.");
+    return await readAccountRateLimitStatus(account);
+  }
+
+  async scheduleTaskResume(
+    accountId: string,
+    threadId: string,
+    title: string,
+    runAt: string,
+    expectedUpdatedAt: number | null,
+  ): Promise<AppSnapshot> {
+    const config = configmod.load();
+    const preferences = loadPreferences(config);
+    const account = preferences.accounts.find((entry) =>
+      entry.id === accountId && entry.enabled && entry.agent === "codex" && Boolean(entry.codexHome));
+    if (!account) throw new Error("The selected Codex account profile is unavailable or disabled.");
+
+    const when = new Date(runAt);
+    const now = Date.now();
+    if (!Number.isFinite(when.getTime()) || when.getTime() < now + 15_000 || when.getTime() > now + 90 * 24 * 60 * 60 * 1000) {
+      throw new Error("Resume time must be between 15 seconds and 90 days from now.");
+    }
+
+    const inventory = await discoverCodexTasks([account]);
+    const owned = inventory.items.find((item) =>
+      item.source === "account" && item.accountId === accountId && item.id === threadId);
+    if (!owned) throw new Error("The task is not present in the selected account's isolated Codex store.");
+
+    const schedule = {
+      id: `resume-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      accountId,
+      threadId,
+      title: String(title || owned.title || "Codex task").slice(0, 240),
+      runAt: when.toISOString(),
+      expectedUpdatedAt,
+      wakePc: account.wakePc === true,
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+      lastStatus: null,
+    };
+    preferences.taskResumeSchedules.push(schedule);
+    savePreferences(preferences);
+    try {
+      this.taskResumeScheduler.sync(preferences.taskResumeSchedules);
+    } catch (error) {
+      preferences.taskResumeSchedules = preferences.taskResumeSchedules.filter((entry) => entry.id !== schedule.id);
+      savePreferences(preferences);
+      try { this.taskResumeScheduler.sync(preferences.taskResumeSchedules); } catch { /* preserve original scheduler error */ }
+      throw error;
+    }
+    return this.snapshot();
+  }
+
+  cancelTaskResumeSchedule(scheduleId: string): AppSnapshot {
+    const config = configmod.load();
+    const preferences = loadPreferences(config);
+    const schedule = preferences.taskResumeSchedules.find((entry) => entry.id === scheduleId);
+    if (!schedule) return this.snapshot();
+    this.taskResumeScheduler.cancel(scheduleId);
+    preferences.taskResumeSchedules = preferences.taskResumeSchedules.filter((entry) => entry.id !== scheduleId);
+    savePreferences(preferences);
+    return this.snapshot();
   }
 
   async getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus> {

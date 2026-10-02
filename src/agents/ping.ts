@@ -26,7 +26,7 @@ const WINDOWS_TASK_PREFIX = "Automode Ping";
 
 export function headlessArgv(agent: string, message: string): string[] {
   if (agent === "claude") return ["claude", "-p", message];
-  if (agent === "codex") return ["codex", "exec", message];
+  if (agent === "codex") return ["codex", "exec", "--ephemeral", message];
   throw new Error(`unknown agent: ${agent}`);
 }
 

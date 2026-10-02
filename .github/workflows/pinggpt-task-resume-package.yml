@@ -1,0 +1,244 @@
+name: PingGPT Task Resume Packaging
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pinggpt-task-discovery-001
+
+concurrency:
+  group: pinggpt-task-resume-package-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout task-resume branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20.20.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+
+      - name: Install exact dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Test task-resume branch
+        shell: pwsh
+        run: npm test
+
+      - name: Package NSIS candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npx electron-builder --win nsis --x64 --publish never --config.directories.output=release-task-resume-nsis
+
+      - name: Verify NSIS candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = @(Get-ChildItem -LiteralPath 'release-task-resume-nsis' -File -Filter 'PingGPT-Windows-Setup-*.exe')
+          if ($setup.Count -ne 1) { throw "Expected exactly one PingGPT Setup EXE, found $($setup.Count)." }
+          $hash = Get-FileHash -LiteralPath $setup[0].FullName -Algorithm SHA256
+          "BRANCH=pinggpt-task-discovery-001" | Set-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "COMMIT=$env:GITHUB_SHA" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "PATH=$($setup[0].Name)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "SIZE=$($setup[0].Length)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "SHA256=$($hash.Hash)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "AUTHENTICODE_STATUS=$((Get-AuthenticodeSignature -LiteralPath $setup[0].FullName).Status)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+
+      - name: Build code-only runtime patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $PWD 'runtime-patch'
+          $payload = Join-Path $root 'payload'
+          New-Item -ItemType Directory -Path $payload -Force | Out-Null
+
+          Copy-Item -LiteralPath 'dist' -Destination $payload -Recurse -Force
+          New-Item -ItemType Directory -Path (Join-Path $payload 'src\gui') -Force | Out-Null
+          Copy-Item -LiteralPath 'src\gui\renderer' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'src\gui\assets' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'package.json' -Destination $payload -Force
+
+          $manifest = Join-Path $root 'FILE_SHA256_MANIFEST.txt'
+          "SCHEMA=pinggpt.runtime-patch.v1" | Set-Content -LiteralPath $manifest -Encoding UTF8
+          "BRANCH=pinggpt-task-discovery-001" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          "COMMIT=$env:GITHUB_SHA" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          "MODE=CODE_ONLY_NO_EXECUTABLE" | Add-Content -LiteralPath $manifest -Encoding UTF8
+          "PAYLOAD_ROOT=payload" | Add-Content -LiteralPath $manifest -Encoding UTF8
+
+          Get-ChildItem -LiteralPath $payload -File -Recurse |
+            Sort-Object FullName |
+            ForEach-Object {
+              $relative = [IO.Path]::GetRelativePath($payload, $_.FullName).Replace('\','/')
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+              "FILE=$relative|SIZE=$($_.Length)|SHA256=$hash" |
+                Add-Content -LiteralPath $manifest -Encoding UTF8
+            }
+
+          $zip = Join-Path $PWD 'Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_RuntimePatch.zip'
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -LiteralPath (Join-Path $root 'payload'), $manifest -DestinationPath $zip -CompressionLevel Optimal
+
+          $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToUpperInvariant()
+          "ZIP_SHA256=$zipHash" | Set-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
+          "ZIP_SIZE=$((Get-Item -LiteralPath $zip).Length)" | Add-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
+          "COMMIT=$env:GITHUB_SHA" | Add-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
+
+      - name: Build and verify frozen R1.06 DeliveryBundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $runtimeName = 'Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_RuntimePatch.zip'
+          $applyName = 'RUN_PingGPT_261003_AccountTabsRefresh_R1.06.ps1'
+          $manifestName = 'PingGPT_R1.06_DeliveryManifest.txt'
+          $bundleName = 'Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_DeliveryBundle.zip'
+          $receiptName = 'PingGPT_R1.06_DeliveryReceipt.txt'
+          $project = 'PingGPT Account Tabs and Fresh Refresh R1.06 Runtime Patch'
+
+          $runtimePath = Join-Path $PWD $runtimeName
+          if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+            throw "Runtime patch missing: $runtimeName"
+          }
+
+          $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $runtimeManifest = Join-Path $PWD 'runtime-patch\FILE_SHA256_MANIFEST.txt'
+          $manifestLines = @(Get-Content -LiteralPath $runtimeManifest -Encoding UTF8)
+          $payloadCount = @($manifestLines | Where-Object { $_ -like 'FILE=*' }).Count
+          if ($payloadCount -lt 1) { throw 'Runtime manifest contains no payload files.' }
+
+          $templatePath = Join-Path $PWD 'scripts\pinggpt-runtime-patch-apply.template.ps1'
+          $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+          $applyText = $template
+          $applyText = $applyText.Replace('@@PROJECT@@', $project)
+          $applyText = $applyText.Replace('@@EXPECTED_COMMIT@@', $env:GITHUB_SHA)
+          $applyText = $applyText.Replace('@@EXPECTED_ZIP_HASH@@', $runtimeHash)
+          $applyText = $applyText.Replace('@@EXPECTED_FILE_COUNT@@', [string]$payloadCount)
+          $applyText = $applyText.Replace('@@PATCH_FILENAME@@', $runtimeName)
+          $applyText = $applyText.Replace('@@BACKUP_TAG@@', 'PingGPT_PreR106_Backup')
+          $applyText = $applyText.Replace('@@TEMP_TAG@@', 'PingGPT_R106')
+
+          if ($applyText -match '@@[A-Z0-9_]+@@') {
+            throw "Unresolved apply-script template token: $($Matches[0])"
+          }
+
+          $deliveryRoot = Join-Path $PWD 'delivery-r106'
+          if (Test-Path -LiteralPath $deliveryRoot) { Remove-Item -LiteralPath $deliveryRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $deliveryRoot -Force | Out-Null
+
+          $applyPath = Join-Path $deliveryRoot $applyName
+          $bundleRuntimePath = Join-Path $deliveryRoot $runtimeName
+          $deliveryManifestPath = Join-Path $deliveryRoot $manifestName
+
+          $applyText | Set-Content -LiteralPath $applyPath -Encoding UTF8
+
+          $escapedApplyPath = $applyPath.Replace("'", "''")
+          $parseCommand = '$tokens=$null;$parseErrors=$null;[System.Management.Automation.Language.Parser]::ParseFile(''' + $escapedApplyPath + ''',[ref]$tokens,[ref]$parseErrors)|Out-Null;if($parseErrors.Count -gt 0){$parseErrors|ForEach-Object{Write-Error $_.Message};exit 1};exit 0'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $parseCommand
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Generated apply script failed Windows PowerShell 5.1 parse validation.'
+          }
+
+          Copy-Item -LiteralPath $runtimePath -Destination $bundleRuntimePath -Force
+
+          $applyHash = (Get-FileHash -LiteralPath $applyPath -Algorithm SHA256).Hash.ToUpperInvariant()
+          @(
+            'SCHEMA=pinggpt.delivery-bundle.v1'
+            'REVISION=R1.06'
+            "BRANCH=pinggpt-task-discovery-001"
+            "COMMIT=$env:GITHUB_SHA"
+            "RUNTIME_PATCH_FILE=$runtimeName"
+            "RUNTIME_PATCH_SHA256=$runtimeHash"
+            "APPLY_SCRIPT_FILE=$applyName"
+            "APPLY_SCRIPT_SHA256=$applyHash"
+            "PAYLOAD_FILE_COUNT=$payloadCount"
+            'MODE=CODE_ONLY_EXISTING_EXE'
+          ) | Set-Content -LiteralPath $deliveryManifestPath -Encoding UTF8
+
+          $deliveryManifestHash = (Get-FileHash -LiteralPath $deliveryManifestPath -Algorithm SHA256).Hash.ToUpperInvariant()
+
+          $bundlePath = Join-Path $PWD $bundleName
+          if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Force }
+          Compress-Archive -Path (Join-Path $deliveryRoot '*') -DestinationPath $bundlePath -CompressionLevel Optimal
+
+          $bundleHash = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $bundleSize = (Get-Item -LiteralPath $bundlePath).Length
+
+          $verifyRoot = Join-Path $PWD 'delivery-r106-verify'
+          if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $verifyRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $bundlePath -DestinationPath $verifyRoot -Force
+
+          $expectedNames = @($runtimeName, $applyName, $manifestName) | Sort-Object
+          $actualNames = @(Get-ChildItem -LiteralPath $verifyRoot -File | Select-Object -ExpandProperty Name | Sort-Object)
+          if (($expectedNames -join '|') -cne ($actualNames -join '|')) {
+            throw "DeliveryBundle member set mismatch. Expected=$($expectedNames -join ',') Actual=$($actualNames -join ',')"
+          }
+
+          if ((Get-FileHash -LiteralPath (Join-Path $verifyRoot $runtimeName) -Algorithm SHA256).Hash.ToUpperInvariant() -cne $runtimeHash) {
+            throw 'DeliveryBundle runtime patch hash mismatch after re-extract.'
+          }
+          if ((Get-FileHash -LiteralPath (Join-Path $verifyRoot $applyName) -Algorithm SHA256).Hash.ToUpperInvariant() -cne $applyHash) {
+            throw 'DeliveryBundle apply script hash mismatch after re-extract.'
+          }
+          if ((Get-FileHash -LiteralPath (Join-Path $verifyRoot $manifestName) -Algorithm SHA256).Hash.ToUpperInvariant() -cne $deliveryManifestHash) {
+            throw 'DeliveryBundle manifest hash mismatch after re-extract.'
+          }
+
+          @(
+            'PROJECT=PingGPT Account Tabs and Fresh Refresh R1.06'
+            'REVISION=R1.06'
+            "COMMIT=$env:GITHUB_SHA"
+            "BUNDLE_FILE=$bundleName"
+            "BUNDLE_SHA256=$bundleHash"
+            "BUNDLE_SIZE=$bundleSize"
+            "RUNTIME_PATCH_SHA256=$runtimeHash"
+            "APPLY_SCRIPT_SHA256=$applyHash"
+            "DELIVERY_MANIFEST_SHA256=$deliveryManifestHash"
+            "PAYLOAD_FILE_COUNT=$payloadCount"
+            'POWERSHELL51_PARSE=PASS'
+            'REEXTRACT_VERIFY=PASS'
+            'FROZEN_AFTER_VERIFY=YES'
+          ) | Set-Content -LiteralPath $receiptName -Encoding UTF8
+
+      - name: Upload frozen R1.06 DeliveryBundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-r106-delivery-bundle
+          path: |
+            Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_DeliveryBundle.zip
+            PingGPT_R1.06_DeliveryReceipt.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload code-only runtime patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-task-discovery-runtime-patch
+          path: |
+            Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_RuntimePatch.zip
+            PingGPT_RuntimePatch_OuterHash.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload NSIS candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-task-resume-nsis-candidate
+          path: |
+            release-task-resume-nsis/PingGPT-Windows-Setup-*.exe
+            release-task-resume-nsis/*.blockmap
+            PingGPT_TaskResume_Manifest.txt
+          if-no-files-found: error
+          retention-days: 7
