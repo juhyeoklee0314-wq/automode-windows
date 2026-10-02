@@ -142,6 +142,25 @@ jobs:
           $deliveryManifestPath = Join-Path $deliveryRoot $manifestName
 
           $applyText | Set-Content -LiteralPath $applyPath -Encoding UTF8
+
+          $parserCheckPath = Join-Path $PWD 'parse-r106-apply.ps1'
+          @'
+param([Parameter(Mandatory=$true)][string]$Path)
+$tokens = $null
+$parseErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+if ($parseErrors.Count -gt 0) {
+    foreach ($entry in $parseErrors) { Write-Error $entry.Message }
+    exit 1
+}
+exit 0
+'@ | Set-Content -LiteralPath $parserCheckPath -Encoding UTF8
+
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $parserCheckPath -Path $applyPath
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Generated apply script failed Windows PowerShell 5.1 parse validation.'
+          }
+
           Copy-Item -LiteralPath $runtimePath -Destination $bundleRuntimePath -Force
 
           $applyHash = (Get-FileHash -LiteralPath $applyPath -Algorithm SHA256).Hash.ToUpperInvariant()
@@ -199,6 +218,7 @@ jobs:
             "APPLY_SCRIPT_SHA256=$applyHash"
             "DELIVERY_MANIFEST_SHA256=$deliveryManifestHash"
             "PAYLOAD_FILE_COUNT=$payloadCount"
+            'POWERSHELL51_PARSE=PASS'
             'REEXTRACT_VERIFY=PASS'
             'FROZEN_AFTER_VERIFY=YES'
           ) | Set-Content -LiteralPath $receiptName -Encoding UTF8
