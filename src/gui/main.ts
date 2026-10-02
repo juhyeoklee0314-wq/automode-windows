@@ -239,6 +239,7 @@ function startGui(): void {
     }
 
     ipcMain.handle("automode:get-snapshot", () => service.snapshot());
+    ipcMain.handle("automode:get-task-inventory", () => service.taskInventory());
     ipcMain.handle("automode:save", (_event, payload: SavePayload) => service.save(payload));
     ipcMain.handle("automode:set-scheduler", (_event, enabled: boolean) => service.setScheduler(Boolean(enabled)));
     ipcMain.handle("automode:set-login", (_event, enabled: boolean) => setRunAtLogin(Boolean(enabled)));
