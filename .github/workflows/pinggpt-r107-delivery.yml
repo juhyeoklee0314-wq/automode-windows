@@ -1,0 +1,323 @@
+name: PingGPT R1.07 Delivery
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pinggpt-account-store-r107
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/pinggpt-r107-delivery.yml"
+
+concurrency:
+  group: pinggpt-r107-delivery-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  delivery:
+    runs-on: windows-2025
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout R1.07 candidate
+        uses: actions/checkout@v4
+
+      - name: Checkout exact R1.06 baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 9ef71bff406701a61611533a4ba1fa69c12d6e92
+          path: baseline-r106
+
+      - name: Set up Node 20.20.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+
+      - name: Install exact R1.07 dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Test and build R1.07 candidate
+        shell: pwsh
+        run: npm test
+
+      - name: Install exact R1.06 baseline dependencies
+        shell: pwsh
+        working-directory: baseline-r106
+        run: npm ci
+
+      - name: Test and build exact R1.06 baseline
+        shell: pwsh
+        working-directory: baseline-r106
+        run: npm test
+
+      - name: Build R1.07 runtime patch and R1.06 baseline manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $runtimeName = 'Working_ZIP_PingGPT_261003_AccountStore_R1.07_RuntimePatch.zip'
+          $baselineManifestName = 'TXT_MANIFEST__PingGPT_R106_ManagedBaseline_20261003_001.txt'
+
+          $root = Join-Path $PWD 'runtime-patch-r107'
+          $payload = Join-Path $root 'payload'
+          if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+          New-Item -ItemType Directory -Path $payload -Force | Out-Null
+
+          Copy-Item -LiteralPath 'dist' -Destination $payload -Recurse -Force
+          New-Item -ItemType Directory -Path (Join-Path $payload 'src\gui') -Force | Out-Null
+          Copy-Item -LiteralPath 'src\gui\renderer' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'src\gui\assets' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'package.json' -Destination $payload -Force
+
+          $manifest = Join-Path $root 'FILE_SHA256_MANIFEST.txt'
+          @(
+            'SCHEMA=pinggpt.runtime-patch.v1'
+            'REVISION=R1.07'
+            'BRANCH=pinggpt-account-store-r107'
+            "COMMIT=$env:GITHUB_SHA"
+            'MODE=CODE_ONLY_NO_EXECUTABLE'
+            'PAYLOAD_ROOT=payload'
+          ) | Set-Content -LiteralPath $manifest -Encoding UTF8
+
+          Get-ChildItem -LiteralPath $payload -File -Recurse |
+            Sort-Object FullName |
+            ForEach-Object {
+              $relative = [IO.Path]::GetRelativePath($payload, $_.FullName).Replace('\','/')
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+              "FILE=$relative|SIZE=$($_.Length)|SHA256=$hash" |
+                Add-Content -LiteralPath $manifest -Encoding UTF8
+            }
+
+          $runtimePath = Join-Path $PWD $runtimeName
+          if (Test-Path -LiteralPath $runtimePath) { Remove-Item -LiteralPath $runtimePath -Force }
+          Compress-Archive -LiteralPath (Join-Path $root 'payload'), $manifest -DestinationPath $runtimePath -CompressionLevel Optimal
+
+          $baselineRoot = Join-Path $PWD 'baseline-r106'
+          $baselineManifest = Join-Path $PWD $baselineManifestName
+          @(
+            'SCHEMA=pinggpt.managed-baseline.v1'
+            'REVISION=R1.06'
+            'BRANCH=pinggpt-task-discovery-001'
+            'COMMIT=9ef71bff406701a61611533a4ba1fa69c12d6e92'
+            'MODE=MANAGED_CODE_BASELINE'
+          ) | Set-Content -LiteralPath $baselineManifest -Encoding UTF8
+
+          $baselineManaged = @()
+          $baselineManaged += Get-ChildItem -LiteralPath (Join-Path $baselineRoot 'dist') -File -Recurse
+          $baselineManaged += Get-ChildItem -LiteralPath (Join-Path $baselineRoot 'src\gui\renderer') -File -Recurse
+          $baselineManaged += Get-ChildItem -LiteralPath (Join-Path $baselineRoot 'src\gui\assets') -File -Recurse
+          $baselineManaged += Get-Item -LiteralPath (Join-Path $baselineRoot 'package.json')
+
+          $baselineManaged |
+            Sort-Object FullName |
+            ForEach-Object {
+              $relative = [IO.Path]::GetRelativePath($baselineRoot, $_.FullName).Replace('\','/')
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+              "FILE=$relative|SIZE=$($_.Length)|SHA256=$hash" |
+                Add-Content -LiteralPath $baselineManifest -Encoding UTF8
+            }
+
+          $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $baselineHash = (Get-FileHash -LiteralPath $baselineManifest -Algorithm SHA256).Hash.ToUpperInvariant()
+          $payloadCount = @((Get-Content -LiteralPath $manifest -Encoding UTF8) | Where-Object { $_ -like 'FILE=*' }).Count
+          $baselineCount = @((Get-Content -LiteralPath $baselineManifest -Encoding UTF8) | Where-Object { $_ -like 'FILE=*' }).Count
+
+          @(
+            "RUNTIME_FILE=$runtimeName"
+            "RUNTIME_SHA256=$runtimeHash"
+            "RUNTIME_FILE_COUNT=$payloadCount"
+            "BASELINE_MANIFEST_FILE=$baselineManifestName"
+            "BASELINE_MANIFEST_SHA256=$baselineHash"
+            "BASELINE_FILE_COUNT=$baselineCount"
+          ) | Set-Content -LiteralPath 'R107_BUILD_FACTS.txt' -Encoding UTF8
+
+      - name: Build baseline-gated R1.07 DeliveryBundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $runtimeName = 'Working_ZIP_PingGPT_261003_AccountStore_R1.07_RuntimePatch.zip'
+          $applyName = 'Working_PS_PingGPT_261003_AccountStore_R1.07_Delivery.ps1'
+          $baselineManifestName = 'TXT_MANIFEST__PingGPT_R106_ManagedBaseline_20261003_001.txt'
+          $deliveryManifestName = 'TXT_MANIFEST__PingGPT_R107_Delivery_20261003_001.txt'
+          $guideName = 'TXT_GUIDE__PingGPT_R107_AccountStore_Apply_20261003_001.txt'
+          $bundleName = 'Working_ZIP_PingGPT_261003_AccountStore_R1.07_DeliveryBundle.zip'
+          $reportName = 'TXT_REPORT__PingGPT_R107_Delivery_Verification_20261003_001.txt'
+          $project = 'PingGPT Account Store R1.07 Runtime Patch'
+          $baselineCommit = '9ef71bff406701a61611533a4ba1fa69c12d6e92'
+
+          $facts = @{}
+          Get-Content -LiteralPath 'R107_BUILD_FACTS.txt' -Encoding UTF8 | ForEach-Object {
+            $parts = $_ -split '=', 2
+            if ($parts.Count -eq 2) { $facts[$parts[0]] = $parts[1] }
+          }
+          $runtimeHash = [string]$facts['RUNTIME_SHA256']
+          $payloadCount = [int]$facts['RUNTIME_FILE_COUNT']
+          $baselineHash = [string]$facts['BASELINE_MANIFEST_SHA256']
+          $baselineCount = [int]$facts['BASELINE_FILE_COUNT']
+          if (-not $runtimeHash -or -not $baselineHash -or $payloadCount -lt 1 -or $baselineCount -lt 1) {
+            throw 'R1.07 build facts are incomplete.'
+          }
+
+          $templatePath = Join-Path $PWD 'scripts\pinggpt-r107-runtime-patch-apply.template.ps1'
+          $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+          $applyText = $template
+          $applyText = $applyText.Replace('@@PROJECT@@', $project)
+          $applyText = $applyText.Replace('@@EXPECTED_COMMIT@@', $env:GITHUB_SHA)
+          $applyText = $applyText.Replace('@@EXPECTED_ZIP_HASH@@', $runtimeHash)
+          $applyText = $applyText.Replace('@@EXPECTED_FILE_COUNT@@', [string]$payloadCount)
+          $applyText = $applyText.Replace('@@PATCH_FILENAME@@', $runtimeName)
+          $applyText = $applyText.Replace('@@BASELINE_MANIFEST_FILENAME@@', $baselineManifestName)
+          $applyText = $applyText.Replace('@@BASELINE_COMMIT@@', $baselineCommit)
+          $applyText = $applyText.Replace('@@BASELINE_MANIFEST_SHA256@@', $baselineHash)
+          if ($applyText -match '@@[A-Z0-9_]+@@') {
+            throw "Unresolved apply-script template token: $($Matches[0])"
+          }
+
+          $deliveryRoot = Join-Path $PWD 'delivery-r107'
+          if (Test-Path -LiteralPath $deliveryRoot) { Remove-Item -LiteralPath $deliveryRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $deliveryRoot -Force | Out-Null
+
+          $applyPath = Join-Path $deliveryRoot $applyName
+          $guidePath = Join-Path $deliveryRoot $guideName
+          $deliveryManifestPath = Join-Path $deliveryRoot $deliveryManifestName
+          Copy-Item -LiteralPath $runtimeName -Destination (Join-Path $deliveryRoot $runtimeName) -Force
+          Copy-Item -LiteralPath $baselineManifestName -Destination (Join-Path $deliveryRoot $baselineManifestName) -Force
+          $applyText | Set-Content -LiteralPath $applyPath -Encoding UTF8
+
+          $escapedApplyPath = $applyPath.Replace("'", "''")
+          $parseCommand = '$tokens=$null;$parseErrors=$null;[System.Management.Automation.Language.Parser]::ParseFile(''' + $escapedApplyPath + ''',[ref]$tokens,[ref]$parseErrors)|Out-Null;if($parseErrors.Count -gt 0){$parseErrors|ForEach-Object{Write-Error $_.Message};exit 1};exit 0'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $parseCommand
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Generated R1.07 apply script failed Windows PowerShell 5.1 parse validation.'
+          }
+
+          @(
+            'PingGPT R1.07 Account Store 적용 안내'
+            ''
+            '목적: 검증된 R1.06 code-only 설치본을 R1.07 Account Store 구조로 패치한다.'
+            '권한: 일반 PowerShell에서 실행한다. 관리자 PowerShell은 필요하지 않다.'
+            '실행 형식: 이 ZIP을 폴더에 압축 해제한 뒤, PingGPT를 Exit로 완전히 종료하고 아래 PS1 파일 자체를 실행한다.'
+            "실행 파일: $applyName"
+            ''
+            '중요 안전 동작:'
+            '- 실행 전에 설치된 관리 코드가 exact R1.06 baseline인지 SHA-256과 파일 집합으로 확인한다.'
+            '- 이미 exact R1.07이면 파일을 다시 덮어쓰지 않는다.'
+            '- R1.06/R1.07 어느 쪽과도 일치하지 않으면 mutation 전에 중단한다.'
+            '- mutation 전에 Desktop에 백업을 만든다.'
+            '- 적용 뒤 관리 파일 hash와 기존 PingGPT.exe 불변을 다시 확인한다.'
+            '- 적용 실패가 mutation 이후 발생하면 백업으로 rollback을 시도한다.'
+            '- Codex auth/token/provider DB/rollout/index는 이 delivery script가 직접 수정하지 않는다.'
+            ''
+            '실행 결과: Desktop에 PingGPT_R1.07_ApplyReceipt_<timestamp>.txt가 생성된다.'
+            '실기 검증 전까지 R1.07은 Working이며 PR #4를 merge하지 않는다.'
+            ''
+            "SOURCE_COMMIT=$env:GITHUB_SHA"
+            "BASELINE_COMMIT=$baselineCommit"
+            "RUNTIME_SHA256=$runtimeHash"
+            "BASELINE_MANIFEST_SHA256=$baselineHash"
+          ) | Set-Content -LiteralPath $guidePath -Encoding UTF8
+
+          $memberNames = @($runtimeName, $applyName, $baselineManifestName, $guideName)
+          @(
+            'SCHEMA=pinggpt.delivery-bundle.v2'
+            'REVISION=R1.07'
+            'THEME=AccountStore'
+            'BRANCH=pinggpt-account-store-r107'
+            "COMMIT=$env:GITHUB_SHA"
+            "BASELINE_COMMIT=$baselineCommit"
+            'MODE=CODE_ONLY_EXISTING_EXE'
+            'EXECUTION_MODE=NATIVE_FILE'
+            'ADMIN_REQUIRED=NO'
+            "RUNTIME_PAYLOAD_FILE_COUNT=$payloadCount"
+            "BASELINE_FILE_COUNT=$baselineCount"
+          ) | Set-Content -LiteralPath $deliveryManifestPath -Encoding UTF8
+
+          foreach ($name in $memberNames) {
+            $path = Join-Path $deliveryRoot $name
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant()
+            $size = (Get-Item -LiteralPath $path).Length
+            "MEMBER=$name|SIZE=$size|SHA256=$hash" | Add-Content -LiteralPath $deliveryManifestPath -Encoding UTF8
+          }
+
+          $deliveryManifestHash = (Get-FileHash -LiteralPath $deliveryManifestPath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $bundlePath = Join-Path $PWD $bundleName
+          if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Force }
+          Compress-Archive -Path (Join-Path $deliveryRoot '*') -DestinationPath $bundlePath -CompressionLevel Optimal
+
+          $bundleHash = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $bundleSize = (Get-Item -LiteralPath $bundlePath).Length
+
+          $verifyRoot = Join-Path $PWD 'delivery-r107-verify'
+          if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $verifyRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $bundlePath -DestinationPath $verifyRoot -Force
+
+          $expectedNames = @($runtimeName, $applyName, $baselineManifestName, $guideName, $deliveryManifestName) | Sort-Object
+          $actualNames = @(Get-ChildItem -LiteralPath $verifyRoot -File | Select-Object -ExpandProperty Name | Sort-Object)
+          if (($expectedNames -join '|') -cne ($actualNames -join '|')) {
+            throw "DeliveryBundle member set mismatch. Expected=$($expectedNames -join ',') Actual=$($actualNames -join ',')"
+          }
+
+          $manifestLines = @(Get-Content -LiteralPath (Join-Path $verifyRoot $deliveryManifestName) -Encoding UTF8)
+          foreach ($line in @($manifestLines | Where-Object { $_ -like 'MEMBER=*' })) {
+            $parts = $line -split '\|'
+            if ($parts.Count -ne 3) { throw "Malformed delivery member row: $line" }
+            $name = $parts[0].Substring(7)
+            $expectedSize = [Int64]$parts[1].Substring(5)
+            $expectedHash = $parts[2].Substring(7).ToUpperInvariant()
+            $path = Join-Path $verifyRoot $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Re-extracted member missing: $name" }
+            if ((Get-Item -LiteralPath $path).Length -ne $expectedSize) { throw "Re-extracted member size mismatch: $name" }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant() -cne $expectedHash) {
+              throw "Re-extracted member SHA256 mismatch: $name"
+            }
+          }
+
+          @(
+            'PROJECT=PingGPT Account Store R1.07'
+            'REVISION=R1.07'
+            'STATUS=ARTIFACT_CREATED'
+            "SOURCE_COMMIT=$env:GITHUB_SHA"
+            "BASELINE_COMMIT=$baselineCommit"
+            "BUNDLE_FILE=$bundleName"
+            "BUNDLE_SHA256=$bundleHash"
+            "BUNDLE_SIZE=$bundleSize"
+            "RUNTIME_SHA256=$runtimeHash"
+            "BASELINE_MANIFEST_SHA256=$baselineHash"
+            "DELIVERY_MANIFEST_SHA256=$deliveryManifestHash"
+            "RUNTIME_PAYLOAD_FILE_COUNT=$payloadCount"
+            "BASELINE_FILE_COUNT=$baselineCount"
+            'CURRENT_NPM_TEST=PASS'
+            'BASELINE_NPM_TEST=PASS'
+            'POWERSHELL51_PARSE=PASS'
+            'REEXTRACT_VERIFY=PASS'
+            'FROZEN_AFTER_VERIFY=YES'
+            'EXECUTION_MODE=NATIVE_FILE'
+            'ADMIN_REQUIRED=NO'
+            'USER_DELIVERY=UNCONFIRMED'
+            'DEVICE_RUNTIME=NOT_TESTED'
+            'VERIFIED_SCOPE=CI+R1.06_baseline_build+R1.07_build+PS5.1_parse+bundle_hash+reextract_member_hash'
+            'UNRESOLVED=Real-device R1.06-to-R1.07 application and account-switch behavior'
+            'RESIDUAL_RISK=Provider/device runtime behavior remains unverified until user-side smoke test'
+            'NEXT_REVIEW_TRIGGER=User-side apply receipt and R1.07 smoke results'
+          ) | Set-Content -LiteralPath $reportName -Encoding UTF8
+
+      - name: Upload frozen R1.07 DeliveryBundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-r107-delivery-bundle
+          path: |
+            Working_ZIP_PingGPT_261003_AccountStore_R1.07_DeliveryBundle.zip
+            TXT_REPORT__PingGPT_R107_Delivery_Verification_20261003_001.txt
+          if-no-files-found: error
+          retention-days: 7
