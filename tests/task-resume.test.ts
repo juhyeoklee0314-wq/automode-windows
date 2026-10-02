@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
@@ -74,14 +74,14 @@ describe("one-shot task resume scheduler", () => {
       createdAt: new Date().toISOString(),
       completedAt: null,
       lastStatus: null,
-    } as const;
+    };
 
     scheduler.sync([schedule]);
     scheduler.sync([]);
     assert.deepEqual(calls.map((entry) => entry.operation), ["register", "delete"]);
     assert.equal(resumeTaskName(schedule.id), "PingGPT Task Resume resume-abc");
 
-    try { require("node:fs").unlinkSync(join(process.cwd(), ".tmp-task-resume-test.json")); } catch {}
+    rmSync(join(process.cwd(), ".tmp-task-resume-test.json"), { force: true });
   });
 });
 
