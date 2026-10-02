@@ -7,10 +7,11 @@ import * as configmod from "../core/config.js";
 import { redactSecrets } from "../core/redact.js";
 import { nextOccurrence, parseHhmm, resolveTz } from "../core/timeutil.js";
 import { codexAuthStatus, startCodexLogin } from "./account-auth.js";
+import { discoverCodexTasks } from "./codex-task-discovery.js";
 import { leaseIsLive, writeLease } from "./lease.js";
 import { loadPreferences, newAccountProfile as createAccountProfile, savePreferences } from "./preferences.js";
 import { WindowsScheduler } from "./scheduler.js";
-import type { AccountAuthStatus, AccountProfile, AppSnapshot, DoctorCheck, GuiPreferences, SavePayload } from "./types.js";
+import type { AccountAuthStatus, AccountProfile, AppSnapshot, DoctorCheck, GuiPreferences, SavePayload, TaskInventorySnapshot } from "./types.js";
 import { BUILD_IDENTITY } from "./diagnostics.js";
 import type { DiagnosticTrace } from "./diagnostics.js";
 
@@ -106,6 +107,12 @@ export class GuiService {
     const config = configmod.load();
     const preferences = loadPreferences(config);
     return createAccountProfile(config, preferences.accounts);
+  }
+
+  async taskInventory(): Promise<TaskInventorySnapshot> {
+    const config = configmod.load();
+    const preferences = loadPreferences(config);
+    return await discoverCodexTasks(preferences.accounts);
   }
 
   async getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus> {
