@@ -194,7 +194,7 @@ export class GuiService {
   async taskInventory(): Promise<TaskInventorySnapshot> {
     const config = configmod.load();
     const preferences = loadPreferences(config);
-    return await discoverCodexTasks(activeAccountTargets(preferences));
+    return await discoverCodexTasks(activeAccountTargets(preferences).filter((target) => target.enabled));
   }
 
   async resumeTask(
