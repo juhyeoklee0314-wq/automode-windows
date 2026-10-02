@@ -408,6 +408,25 @@ function numeric(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+export function chooseSuggestedResetAt(
+  ordinaryUsageAllowed: boolean | null,
+  primaryUsedPercent: number | null,
+  primaryResetsAt: number | null,
+  secondaryUsedPercent: number | null,
+  secondaryResetsAt: number | null,
+  nowMs = Date.now(),
+): number | null {
+  const blockedResets = [
+    primaryUsedPercent !== null && primaryUsedPercent >= 100 ? primaryResetsAt : null,
+    secondaryUsedPercent !== null && secondaryUsedPercent >= 100 ? secondaryResetsAt : null,
+  ].filter((value): value is number => value !== null && value * 1000 > nowMs);
+  const futureResets = [primaryResetsAt, secondaryResetsAt]
+    .filter((value): value is number => value !== null && value * 1000 > nowMs);
+  if (blockedResets.length) return Math.max(...blockedResets);
+  if (!futureResets.length) return null;
+  return ordinaryUsageAllowed === false ? Math.max(...futureResets) : Math.min(...futureResets);
+}
+
 export async function readAccountRateLimitStatus(account: AccountProfile): Promise<AccountRateLimitStatus> {
   let session: Session | undefined;
   try {
@@ -425,19 +444,13 @@ export async function readAccountRateLimitStatus(account: AccountProfile): Promi
     const secondaryUsedPercent = numeric(secondary?.usedPercent);
     const secondaryResetsAt = numeric(secondary?.resetsAt);
     const ordinaryUsageAllowed = typeof root?.ordinaryUsageAllowed === "boolean" ? root.ordinaryUsageAllowed : null;
-    const blockedResets = [
-      primaryUsedPercent !== null && primaryUsedPercent >= 100 ? primaryResetsAt : null,
-      secondaryUsedPercent !== null && secondaryUsedPercent >= 100 ? secondaryResetsAt : null,
-    ].filter((value): value is number => value !== null && value * 1000 > Date.now());
-    const futureResets = [primaryResetsAt, secondaryResetsAt]
-      .filter((value): value is number => value !== null && value * 1000 > Date.now());
-    const suggestedResetAt = blockedResets.length
-      ? Math.max(...blockedResets)
-      : futureResets.length
-        ? ordinaryUsageAllowed === false
-          ? Math.max(...futureResets)
-          : Math.min(...futureResets)
-        : null;
+    const suggestedResetAt = chooseSuggestedResetAt(
+      ordinaryUsageAllowed,
+      primaryUsedPercent,
+      primaryResetsAt,
+      secondaryUsedPercent,
+      secondaryResetsAt,
+    );
     return {
       accountId: account.id,
       ordinaryUsageAllowed,
