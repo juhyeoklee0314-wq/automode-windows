@@ -1,0 +1,64 @@
+name: PingGPT Task Resume Packaging
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pinggpt-task-discovery-001
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout task-resume branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20.20.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+
+      - name: Install exact dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Test task-resume branch
+        shell: pwsh
+        run: npm test
+
+      - name: Package NSIS candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npx electron-builder --win nsis --x64 --publish never --config.directories.output=release-task-resume-nsis
+
+      - name: Verify NSIS candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = @(Get-ChildItem -LiteralPath 'release-task-resume-nsis' -File -Filter 'PingGPT-Windows-Setup-*.exe')
+          if ($setup.Count -ne 1) { throw "Expected exactly one PingGPT Setup EXE, found $($setup.Count)." }
+          $hash = Get-FileHash -LiteralPath $setup[0].FullName -Algorithm SHA256
+          "BRANCH=pinggpt-task-discovery-001" | Set-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "COMMIT=$env:GITHUB_SHA" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "PATH=$($setup[0].Name)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "SIZE=$($setup[0].Length)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "SHA256=$($hash.Hash)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+          "AUTHENTICODE_STATUS=$((Get-AuthenticodeSignature -LiteralPath $setup[0].FullName).Status)" | Add-Content -LiteralPath 'PingGPT_TaskResume_Manifest.txt' -Encoding UTF8
+
+      - name: Upload NSIS candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-task-resume-nsis-candidate
+          path: |
+            release-task-resume-nsis/PingGPT-Windows-Setup-*.exe
+            release-task-resume-nsis/*.blockmap
+            PingGPT_TaskResume_Manifest.txt
+          if-no-files-found: error
+          retention-days: 7
