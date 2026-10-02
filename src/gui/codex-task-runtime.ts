@@ -491,9 +491,22 @@ export async function resumeCodexTask(
       return result(account.id, threadId, "abort", "history_changed", "The task changed after the Task list was loaded.");
     }
 
-    const initialTurns = await listLatestTurns(session, threadId);
+    let inspectionThread = before;
+    let inspectionTurns = await listLatestTurns(session, threadId);
     const historyMode = typeof before.historyMode === "string" ? before.historyMode : "unknown";
-    const decision = decideResumeRecovery(initialTurns, historyMode);
+    let alreadyResumed = false;
+
+    // A paginated rollout can exist before its SQLite turn projection is populated.
+    // Hydrate that projection through the official same-profile thread/resume path,
+    // but do not submit input until ownership, stale-history, and recovery checks pass.
+    if (inspectionTurns.length === 0 && historyMode === "paginated") {
+      await resumeThread(session, threadId);
+      alreadyResumed = true;
+      inspectionThread = await readThread(session, threadId);
+      inspectionTurns = await listLatestTurns(session, threadId);
+    }
+
+    const decision = decideResumeRecovery(inspectionTurns, historyMode);
 
     if (decision.action === "wait") {
       return result(account.id, threadId, "wait", "already_running", "The task already has a running turn; PingGPT did not submit another message.");
@@ -502,10 +515,12 @@ export async function resumeCodexTask(
       return result(account.id, threadId, "abort", "rejected", `Resume was blocked: ${decision.reason}.`);
     }
 
-    await resumeThread(session, threadId);
+    if (!alreadyResumed) {
+      await resumeThread(session, threadId);
+    }
     const verifyThread = await readThread(session, threadId);
     const verifyTurns = await listLatestTurns(session, threadId);
-    if (snapshotHash(before, initialTurns) !== snapshotHash(verifyThread, verifyTurns)) {
+    if (snapshotHash(inspectionThread, inspectionTurns) !== snapshotHash(verifyThread, verifyTurns)) {
       return result(account.id, threadId, "abort", "history_changed", "The task changed during recovery inspection; PingGPT aborted without submitting input.");
     }
 
