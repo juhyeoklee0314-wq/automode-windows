@@ -251,7 +251,6 @@ export function decideResumeRecovery(turns: TurnRecord[], historyMode = "paginat
 function snapshotHash(thread: Record<string, unknown>, turns: TurnRecord[]): string {
   const stable = {
     id: thread.id,
-    updatedAt: thread.updatedAt,
     historyMode: thread.historyMode,
     turns: turns.map((turn) => ({
       id: turn.id,
