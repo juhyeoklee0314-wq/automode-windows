@@ -136,12 +136,19 @@ describe("task resume wiring safety", () => {
     assert.match(service, /filter\(\(schedule\) => resumableAccounts\.has\(schedule\.accountId\)\)/);
   });
 
-  it("checks persisted running state before calling thread/resume", () => {
+  it("hydrates only an empty paginated projection before deciding recovery", () => {
     const runtime = source("src/gui/codex-task-runtime.ts");
-    const decisionAt = runtime.indexOf("const decision = decideResumeRecovery");
-    const resumeAt = runtime.indexOf("await resumeThread(session, threadId)");
-    assert.ok(decisionAt >= 0);
-    assert.ok(resumeAt > decisionAt);
+    const ownershipAt = runtime.indexOf("verifyTaskAccountOwnership(before, account.codexHome, currentAccountId)");
+    const staleCheckAt = runtime.indexOf("expectedUpdatedAt !== null && actualUpdatedAt !== expectedUpdatedAt");
+    const hydrateGuardAt = runtime.indexOf('inspectionTurns.length === 0 && historyMode === "paginated"');
+    const hydrateResumeAt = runtime.indexOf("await resumeThread(session, threadId)", hydrateGuardAt);
+    const decisionAt = runtime.indexOf("const decision = decideResumeRecovery", hydrateGuardAt);
+    assert.ok(ownershipAt >= 0);
+    assert.ok(staleCheckAt > ownershipAt);
+    assert.ok(hydrateGuardAt > staleCheckAt);
+    assert.ok(hydrateResumeAt > hydrateGuardAt);
+    assert.ok(decisionAt > hydrateResumeAt);
+    assert.match(runtime, /if \(!alreadyResumed\)\s*\{\s*await resumeThread\(session, threadId\)/);
   });
 
   it("uses the existing safe wake-return pattern for scheduled task resumes", () => {
