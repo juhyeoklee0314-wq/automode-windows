@@ -138,6 +138,13 @@ describe("task resume wiring safety", () => {
     assert.match(main, /getSystemIdleTime: \(\) => powerMonitor\.getSystemIdleTime\(\)/);
   });
 
+  it("streams long-running app-server output without a cumulative byte kill switch", () => {
+    const runtime = source("src/gui/codex-task-runtime.ts");
+    assert.doesNotMatch(runtime, /MAX_CAPTURE|captured:\s*number|session\.captured/);
+    assert.match(runtime, /MAX_RPC_LINE_BUFFER/);
+    assert.match(runtime, /message\.method === "turn\/completed"/);
+  });
+
   it("uses official resume, turns-list, revert, and turn-start APIs", () => {
     const runtime = source("src/gui/codex-task-runtime.ts");
     assert.match(runtime, /"thread\/resume"/);
