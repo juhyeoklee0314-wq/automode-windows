@@ -4,13 +4,13 @@ import { join } from "node:path";
 
 import { stateDir } from "../core/config.js";
 import { parseHhmm } from "../core/timeutil.js";
-import type { AccountProfile, SchedulerTaskStatus } from "./types.js";
+import type { AccountTarget, SchedulerTaskStatus } from "./types.js";
 
 export const GUI_TASK_PREFIX = "Automode GUI Ping";
 const receiptPath = (): string => join(stateDir(), "gui-schedule.json");
 
 interface Receipt { tasks: SchedulerTaskStatus[] }
-interface DesiredTask extends SchedulerTaskStatus { accountId: string; wakePc: boolean }
+interface DesiredTask extends SchedulerTaskStatus { profileId: string; storeId: string; wakePc: boolean }
 export type TaskCommand = (args: string[]) => { ok: boolean; output: string };
 
 function powershellTaskSettings(taskName: string, wakePc: boolean): { ok: boolean; output: string } {
@@ -77,19 +77,20 @@ function writeReceipt(tasks: SchedulerTaskStatus[], path = receiptPath()): void 
 }
 
 const safePart = (value: string): string => value.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 40);
-export const taskName = (accountId: string, scheduleId: string): string =>
-  `${GUI_TASK_PREFIX} ${safePart(accountId)} ${safePart(scheduleId)}`;
+export const taskName = (profileId: string, storeId: string, scheduleId: string): string =>
+  `${GUI_TASK_PREFIX} ${safePart(profileId)} ${safePart(storeId)} ${safePart(scheduleId)}`;
 
-function desiredTasks(accounts: AccountProfile[]): DesiredTask[] {
+function desiredTasks(accounts: AccountTarget[]): DesiredTask[] {
   const desired: DesiredTask[] = [];
   for (const account of accounts.filter((entry) => entry.enabled)) {
     account.schedules.forEach((time, index) => {
       if (!parseHhmm(time)) return;
       const scheduleId = `${time.replace(":", "")}-${index}`;
       desired.push({
-        accountId: account.id,
+        profileId: account.profileId,
+        storeId: account.storeId,
         wakePc: account.wakePc === true,
-        name: taskName(account.id, scheduleId),
+        name: taskName(account.profileId, account.storeId, scheduleId),
         scheduleId,
         time,
         installed: false,
@@ -113,9 +114,9 @@ export function schedulerExecutable(execPath: string, portableFile = process.env
   return portableFile?.trim() || execPath;
 }
 
-function windowsAction(executable: string, accountId: string, scheduleId: string): string {
+function windowsAction(executable: string, profileId: string, storeId: string, scheduleId: string): string {
   const quote = (value: string): string => `"${value.replace(/"/g, '""')}"`;
-  return [executable, "--scheduled-runner", accountId, scheduleId].map(quote).join(" ");
+  return [executable, "--scheduled-runner", profileId, storeId, scheduleId].map(quote).join(" ");
 }
 
 export class WindowsScheduler {
@@ -125,7 +126,7 @@ export class WindowsScheduler {
     private readonly receiptFile: string = receiptPath(),
   ) {}
 
-  install(accounts: AccountProfile[]): SchedulerTaskStatus[] {
+  install(accounts: AccountTarget[]): SchedulerTaskStatus[] {
     const existing = readReceipt(this.receiptFile);
     const desired = desiredTasks(accounts);
     const wanted = new Set(desired.map((task) => task.name));
@@ -149,7 +150,7 @@ export class WindowsScheduler {
     for (const task of desired) {
       const result = this.runTask([
         "/Create", "/F", "/SC", "DAILY", "/ST", task.time, "/TN", task.name,
-        "/TR", windowsAction(this.executable, task.accountId, task.scheduleId), "/IT",
+        "/TR", windowsAction(this.executable, task.profileId, task.storeId, task.scheduleId), "/IT",
       ]);
       if (!result.ok) {
         writeReceipt(tracked, this.receiptFile);
@@ -177,7 +178,7 @@ export class WindowsScheduler {
   }
 
   /** Remove tasks for accounts/schedules that were deleted without enabling new work. */
-  prune(accounts: AccountProfile[]): SchedulerTaskStatus[] {
+  prune(accounts: AccountTarget[]): SchedulerTaskStatus[] {
     const receipt = readReceipt(this.receiptFile);
     const wanted = new Set(desiredTasks(accounts).map((task) => task.name));
     let tracked = [...receipt.tasks];

@@ -1,7 +1,7 @@
 export type ProcessMode =
   | { kind: "gui" }
-  | { kind: "scheduled"; accountId: string; scheduleId: string }
-  | { kind: "scheduled-dry-run"; accountId: string; scheduleId: string }
+  | { kind: "scheduled"; profileId: string; storeId: string; scheduleId: string }
+  | { kind: "scheduled-dry-run"; profileId: string; storeId: string; scheduleId: string }
   | { kind: "scheduled-task-resume"; scheduleId: string };
 
 export function resolveProcessMode(argv: string[]): ProcessMode {
@@ -11,11 +11,21 @@ export function resolveProcessMode(argv: string[]): ProcessMode {
   }
   const dryRunAt = argv.indexOf("--scheduled-dry-run");
   if (dryRunAt >= 0) {
-    return { kind: "scheduled-dry-run", accountId: argv[dryRunAt + 1] ?? "", scheduleId: argv[dryRunAt + 2] ?? "" };
+    return {
+      kind: "scheduled-dry-run",
+      profileId: argv[dryRunAt + 1] ?? "",
+      storeId: argv[dryRunAt + 2] ?? "",
+      scheduleId: argv[dryRunAt + 3] ?? "",
+    };
   }
   const scheduledAt = argv.indexOf("--scheduled-runner");
   if (scheduledAt >= 0) {
-    return { kind: "scheduled", accountId: argv[scheduledAt + 1] ?? "", scheduleId: argv[scheduledAt + 2] ?? "" };
+    return {
+      kind: "scheduled",
+      profileId: argv[scheduledAt + 1] ?? "",
+      storeId: argv[scheduledAt + 2] ?? "",
+      scheduleId: argv[scheduledAt + 3] ?? "",
+    };
   }
   return { kind: "gui" };
 }

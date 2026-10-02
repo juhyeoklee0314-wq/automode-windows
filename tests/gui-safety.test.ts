@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test";
 
 import { redactSecrets } from "../src/core/redact.js";
 import { acquireExecutionLock, clearLease, executionLockPath, leaseIsLive, STALE_LOCK_GRACE_MS, writeLease } from "../src/gui/lease.js";
-import { defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, savePreferences } from "../src/gui/preferences.js";
+import { activeAccountStore, defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { reliablePing } from "../src/gui/reliable-ping.js";
 import { GUI_TASK_PREFIX, schedulerExecutable, WindowsScheduler } from "../src/gui/scheduler.js";
 import { buildPingEnvironment, headlessArgv } from "../src/agents/ping.js";
@@ -18,6 +18,7 @@ import { DEFAULTS } from "../src/core/config.js";
 import { codexNativeCandidates, commandCandidates, prepareStdioSpawn } from "../src/platform/command.js";
 import { DIAGNOSTIC_LOG_PATH, DiagnosticTrace } from "../src/gui/diagnostics.js";
 import { resolveProcessMode } from "../src/gui/routing.js";
+import type { AccountTarget } from "../src/gui/types.js";
 
 const root = mkdtempSync(join(tmpdir(), "automode-gui-test-"));
 const oldState = process.env.XDG_STATE_HOME;
@@ -129,7 +130,9 @@ describe("GUI lifecycle lease", () => {
     writeLease(true, Date.now(), process.pid);
     clearLease();
     assert.equal(leaseIsLive(), false);
-    assert.equal(await runScheduled("default", "0600-0"), 75);
+    const preferences = defaults(DEFAULTS);
+    const store = activeAccountStore(preferences.accounts[0]!)!;
+    assert.equal(await runScheduled("default", store.id, "0600-0"), 75);
   });
 });
 
@@ -155,8 +158,8 @@ describe("GUI native control wiring", () => {
   });
 
   it("routes scheduled modes before the normal GUI path", () => {
-    assert.deepEqual(resolveProcessMode(["Automode.exe", "--scheduled-runner", "default", "0600-0"]), {
-      kind: "scheduled", accountId: "default", scheduleId: "0600-0",
+    assert.deepEqual(resolveProcessMode(["Automode.exe", "--scheduled-runner", "default", "store-a", "0600-0"]), {
+      kind: "scheduled", profileId: "default", storeId: "store-a", scheduleId: "0600-0",
     });
     assert.deepEqual(resolveProcessMode(["Automode.exe"]), { kind: "gui" });
   });
@@ -197,8 +200,17 @@ describe("Windows GUI scheduler", () => {
       return { ok: true, output: "Ready" };
     });
     const tasks = scheduler.install([{
-      id: "default", displayName: "Default", enabled: true, message: "hi",
-      schedules: ["06:00", "17:00"], agent: "codex",
+      id: "default",
+      profileId: "default",
+      storeId: "store-default",
+      displayName: "Default",
+      enabled: true,
+      codexHome: "C:\\Profiles\\default",
+      identityKey: "identity-default",
+      bindingState: "ready",
+      message: "hi",
+      schedules: ["06:00", "17:00"],
+      agent: "codex",
     }]);
     assert.equal(tasks.length, 2);
     assert.ok(tasks.every((task) => task.name.startsWith(GUI_TASK_PREFIX)));
@@ -310,7 +322,12 @@ describe("reliability safeguards", () => {
   it("scheduled dry-run cannot commit production dedupe state", async () => {
     savePreferences(defaults(DEFAULTS));
     const statePath = join(process.env.XDG_STATE_HOME!, "automode", "state.json");
-    const code = await runScheduledDryRun("default", "0500-0");
+    const prefs = loadPreferences(DEFAULTS);
+    const store = activeAccountStore(prefs.accounts[0]!)!;
+    store.bindingState = "ready";
+    store.identityKey = "identity-test";
+    savePreferences(prefs);
+    const code = await runScheduledDryRun("default", store.id, "0500-0");
     assert.ok([0, 127].includes(code));
     assert.equal(existsSync(statePath), false);
   });
@@ -322,15 +339,24 @@ describe("reliability safeguards", () => {
   it("applies CODEX_HOME only to an explicitly configured Codex account", () => {
     const inherited = process.env.CODEX_HOME;
     process.env.CODEX_HOME = "inherited-profile";
-    const base = { id: "default", displayName: "Default", enabled: true, message: "hi", schedules: ["05:00"] };
-    assert.equal(accountPingEnvironment({ ...base, agent: "codex" }), undefined);
-    assert.deepEqual(accountPingEnvironment({ ...base, agent: "codex", codexHome: "C:\\Profiles\\work" }), {
-      CODEX_HOME: "C:\\Profiles\\work",
-    });
-    assert.deepEqual(accountPingUnsetEnvironment({ ...base, agent: "codex", codexHome: "C:\\Profiles\\work" }), [
+    const base: AccountTarget = {
+      id: "default",
+      profileId: "default",
+      storeId: "store-default",
+      displayName: "Default",
+      enabled: true,
+      codexHome: "C:\\Profiles\\work",
+      identityKey: "identity-default",
+      bindingState: "ready",
+      message: "hi",
+      schedules: ["05:00"],
+      agent: "codex",
+    };
+    assert.deepEqual(accountPingEnvironment(base), { CODEX_HOME: "C:\\Profiles\\work" });
+    assert.deepEqual(accountPingUnsetEnvironment(base), [
       "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
     ]);
-    assert.equal(accountPingEnvironment({ ...base, agent: "claude", codexHome: "C:\\Profiles\\work" }), undefined);
+    assert.equal(accountPingEnvironment({ ...base, agent: "claude" }), undefined);
     const childEnv = buildPingEnvironment(
       { CODEX_HOME: "C:\\Profiles\\work", OPENAI_API_KEY: "temporary-value" },
       ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
@@ -385,7 +411,7 @@ describe("multi-account-ready preferences", () => {
   it("projects the legacy single-account config as the default profile", () => {
     const preferences = defaults(DEFAULTS);
     assert.equal(preferences.accounts[0]?.id, "default");
-    assert.deepEqual(preferences.accounts[0]?.schedules, DEFAULTS.ping.times);
+    assert.deepEqual(activeAccountStore(preferences.accounts[0]!)?.schedules, DEFAULTS.ping.times);
     savePreferences(preferences);
     const raw = readFileSync(join(process.env.XDG_STATE_HOME!, "automode", "gui-preferences.json"), "utf8");
     assert.doesNotMatch(raw, /access_token|refresh_token|cookie|auth\.json/i);

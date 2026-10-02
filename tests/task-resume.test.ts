@@ -80,7 +80,8 @@ describe("one-shot task resume scheduler", () => {
 
     const schedule = {
       id: "resume-abc",
-      accountId: "profile-a",
+      profileId: "profile-a",
+      storeId: "store-a",
       threadId: "01a00000-0000-7000-8000-000000000001",
       title: "Task",
       runAt: new Date(Date.now() + 60_000).toISOString(),
@@ -129,11 +130,12 @@ describe("task resume wiring safety", () => {
     assert.match(runtime, /Task rollout is outside the selected account store/);
   });
 
-  it("prunes resume schedules that no longer have an enabled Codex account", () => {
+  it("keeps one-shot schedules bound to the exact active store", () => {
     const service = source("src/gui/service.ts");
-    assert.match(service, /resumableAccounts/);
-    assert.match(service, /taskResumeSchedules = payload\.preferences\.taskResumeSchedules/);
-    assert.match(service, /filter\(\(schedule\) => resumableAccounts\.has\(schedule\.accountId\)\)/);
+    const runner = source("src/gui/scheduled-task-resume.ts");
+    assert.match(service, /profileId,\s*storeId,\s*threadId/);
+    assert.match(runner, /profile\.activeStoreId !== schedule\.storeId/);
+    assert.match(runner, /account\.bindingState !== "ready"/);
   });
 
   it("hydrates only an empty paginated projection before deciding recovery", () => {

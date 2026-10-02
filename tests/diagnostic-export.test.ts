@@ -26,7 +26,19 @@ function context(): DiagnosticExportContext {
     schedulerTarget: "C:\\Apps\\PingGPT.exe",
     diagnosticLogPath: "C:\\state\\phase6-diagnostic.log",
     schedulerTasks: [{ name: "Automode GUI Ping default 0600-0", scheduleId: "0600-0", time: "06:00", installed: true, enabled: true }],
-    accounts: [{ id: "default", displayName: "Default", enabled: true, agent: "codex", codexHome: "C:\\CodexHome", message: "TOP SECRET MESSAGE", schedules: ["06:00"] }],
+    accounts: [{
+      id: "default",
+      profileId: "default",
+      storeId: "store-default",
+      displayName: "Default",
+      enabled: true,
+      agent: "codex",
+      codexHome: "C:\\CodexHome",
+      identityKey: "hashed-identity",
+      bindingState: "ready",
+      message: "TOP SECRET MESSAGE",
+      schedules: ["06:00"],
+    }],
     now,
   };
 }

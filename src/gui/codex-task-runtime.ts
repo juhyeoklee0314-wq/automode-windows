@@ -4,7 +4,7 @@ import { closeSync, openSync, readSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 import { prepareStdioSpawn, resolveCodexNativeExecutable, which } from "../platform/command.js";
-import type { AccountProfile, AccountRateLimitStatus, TaskResumeResult } from "./types.js";
+import type { AccountTarget, AccountRateLimitStatus, TaskResumeResult } from "./types.js";
 
 const RPC_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -38,7 +38,7 @@ export interface ResumeDecision {
   beforeTurnId?: string;
 }
 
-function accountEnv(account: AccountProfile): NodeJS.ProcessEnv {
+function accountEnv(account: AccountTarget): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: account.codexHome };
   delete env.OPENAI_API_KEY;
   delete env.CODEX_API_KEY;
@@ -71,7 +71,7 @@ function respondFailClosed(session: Session, message: RpcMessage): void {
   try { session.child.stdin?.write(JSON.stringify(response) + "\n"); } catch { /* timeout handles shutdown */ }
 }
 
-function startSession(account: AccountProfile): Promise<Session> {
+function startSession(account: AccountTarget): Promise<Session> {
   if (account.agent !== "codex" || !account.codexHome) throw new Error("Task resume requires an isolated Codex profile.");
   const launcher = which("codex");
   if (!launcher) throw new Error("Codex CLI was not found on PATH.");
@@ -322,13 +322,14 @@ async function startTurn(session: Session, threadId: string, input: unknown[]): 
 
 function result(
   accountId: string,
+  storeId: string,
   threadId: string,
   action: TaskResumeResult["action"],
   status: TaskResumeResult["status"],
   detail: string,
   turnId: string | null = null,
 ): TaskResumeResult {
-  return { accountId, threadId, action, status, detail, turnId };
+  return { accountId, storeId, threadId, action, status, detail, turnId };
 }
 
 function readFirstLine(path: string, maxBytes = 512 * 1024): string {
@@ -427,7 +428,7 @@ export function chooseSuggestedResetAt(
   return ordinaryUsageAllowed === false ? Math.max(...futureResets) : Math.min(...futureResets);
 }
 
-export async function readAccountRateLimitStatus(account: AccountProfile): Promise<AccountRateLimitStatus> {
+export async function readAccountRateLimitStatus(account: AccountTarget): Promise<AccountRateLimitStatus> {
   let session: Session | undefined;
   try {
     session = await startSession(account);
@@ -452,7 +453,8 @@ export async function readAccountRateLimitStatus(account: AccountProfile): Promi
       secondaryResetsAt,
     );
     return {
-      accountId: account.id,
+      accountId: account.profileId,
+      storeId: account.storeId,
       ordinaryUsageAllowed,
       primaryUsedPercent,
       primaryResetsAt,
@@ -466,16 +468,16 @@ export async function readAccountRateLimitStatus(account: AccountProfile): Promi
 }
 
 export async function resumeCodexTask(
-  account: AccountProfile,
+  account: AccountTarget,
   threadId: string,
   expectedUpdatedAt: number | null,
   continueMessage = "continue",
 ): Promise<TaskResumeResult> {
-  if (account.agent !== "codex" || !account.codexHome) {
-    return result(account.id, threadId, "abort", "rejected", "The selected account is not an isolated Codex profile.");
+  if (account.agent !== "codex" || !account.codexHome || account.bindingState !== "ready") {
+    return result(account.profileId, account.storeId, threadId, "abort", "rejected", "The selected account store is not ready for Codex execution.");
   }
   if (!/^[0-9A-Fa-f-]{36}$/.test(threadId)) {
-    return result(account.id, threadId, "abort", "rejected", "The task id is invalid.");
+    return result(account.profileId, account.storeId, threadId, "abort", "rejected", "The task id is invalid.");
   }
 
   let session: Session | undefined;
@@ -485,10 +487,17 @@ export async function resumeCodexTask(
 
     const before = await readThread(session, threadId);
     const currentAccountId = await currentAuthenticatedAccountId(session);
+    if (!account.identityKey) {
+      throw new Error("Account store identity is not verified.");
+    }
+    const currentIdentityKey = createHash("sha256").update(currentAccountId, "utf8").digest("hex");
+    if (currentIdentityKey !== account.identityKey) {
+      throw new Error("Account store credential does not match the bound ChatGPT account.");
+    }
     verifyTaskAccountOwnership(before, account.codexHome, currentAccountId);
     const actualUpdatedAt = typeof before.updatedAt === "number" ? before.updatedAt : null;
     if (expectedUpdatedAt !== null && actualUpdatedAt !== expectedUpdatedAt) {
-      return result(account.id, threadId, "abort", "history_changed", "The task changed after the Task list was loaded.");
+      return result(account.profileId, account.storeId, threadId, "abort", "history_changed", "The task changed after the Task list was loaded.");
     }
 
     let inspectionThread = before;
@@ -509,10 +518,10 @@ export async function resumeCodexTask(
     const decision = decideResumeRecovery(inspectionTurns, historyMode);
 
     if (decision.action === "wait") {
-      return result(account.id, threadId, "wait", "already_running", "The task already has a running turn; PingGPT did not submit another message.");
+      return result(account.profileId, account.storeId, threadId, "wait", "already_running", "The task already has a running turn; PingGPT did not submit another message.");
     }
     if (decision.action === "abort") {
-      return result(account.id, threadId, "abort", "rejected", `Resume was blocked: ${decision.reason}.`);
+      return result(account.profileId, account.storeId, threadId, "abort", "rejected", `Resume was blocked: ${decision.reason}.`);
     }
 
     if (!alreadyResumed) {
@@ -521,7 +530,7 @@ export async function resumeCodexTask(
     const verifyThread = await readThread(session, threadId);
     const verifyTurns = await listLatestTurns(session, threadId);
     if (snapshotHash(inspectionThread, inspectionTurns) !== snapshotHash(verifyThread, verifyTurns)) {
-      return result(account.id, threadId, "abort", "history_changed", "The task changed during recovery inspection; PingGPT aborted without submitting input.");
+      return result(account.profileId, account.storeId, threadId, "abort", "history_changed", "The task changed during recovery inspection; PingGPT aborted without submitting input.");
     }
 
     let input: unknown[];
@@ -537,7 +546,8 @@ export async function resumeCodexTask(
 
     const started = await startTurn(session, threadId, input);
     return result(
-      account.id,
+      account.profileId,
+      account.storeId,
       threadId,
       decision.action,
       started.status === "completed" ? "completed" : "turn_failed",
@@ -548,7 +558,7 @@ export async function resumeCodexTask(
     );
   } catch (error) {
     const detail = String((error as { message?: unknown })?.message ?? error).slice(0, 500);
-    return result(account.id, threadId, "abort", "error", detail);
+    return result(account.profileId, account.storeId, threadId, "abort", "error", detail);
   } finally {
     stopSession(session);
   }

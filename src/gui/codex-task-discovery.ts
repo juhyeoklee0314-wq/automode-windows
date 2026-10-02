@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -5,7 +6,7 @@ import { join, normalize, resolve } from "node:path";
 
 import { prepareStdioSpawn, resolveCodexNativeExecutable, which } from "../platform/command.js";
 import type {
-  AccountProfile,
+  AccountTarget,
   TaskInventoryAccountState,
   TaskInventoryItem,
   TaskInventorySnapshot,
@@ -43,13 +44,16 @@ interface DiscoveryTarget {
   source: TaskInventorySource;
   codexHome: string;
   accountId: string | null;
+  storeId: string | null;
   accountLabel: string;
+  bindingState: AccountTarget["bindingState"] | null;
 }
 
 interface SourceIdentity {
   providerAccountId: string | null;
   connectedEmail: string | null;
   planType: string | null;
+  identityKey: string | null;
   identityVerified: boolean;
 }
 
@@ -67,6 +71,7 @@ const emptyIdentity = (): SourceIdentity => ({
   providerAccountId: null,
   connectedEmail: null,
   planType: null,
+  identityKey: null,
   identityVerified: false,
 });
 
@@ -195,7 +200,7 @@ function isUserResumableRolloutSource(value: unknown): boolean {
 export function parseRolloutInventoryText(
   text: string,
   modifiedAtSeconds: number,
-  target: Pick<DiscoveryTarget, "source" | "accountId" | "accountLabel">,
+  target: Pick<DiscoveryTarget, "source" | "accountId" | "storeId" | "accountLabel">,
 ): TaskInventoryItem | null {
   const lines = text.split(/\r?\n/);
   let meta: Record<string, unknown> | null = null;
@@ -237,6 +242,7 @@ export function parseRolloutInventoryText(
     id,
     source: target.source,
     accountId: target.accountId,
+    storeId: target.storeId,
     accountLabel: target.accountLabel,
     title,
     preview: preview ?? "",
@@ -294,7 +300,7 @@ function listRolloutSource(target: DiscoveryTarget): RolloutSource {
 
 export function parseTaskInventoryThread(
   raw: unknown,
-  target: Pick<DiscoveryTarget, "source" | "accountId" | "accountLabel">,
+  target: Pick<DiscoveryTarget, "source" | "accountId" | "storeId" | "accountLabel">,
 ): TaskInventoryItem | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
@@ -309,6 +315,7 @@ export function parseTaskInventoryThread(
     id,
     source: target.source,
     accountId: target.accountId,
+    storeId: target.storeId,
     accountLabel: target.accountLabel,
     title,
     preview: preview ?? "",
@@ -331,7 +338,7 @@ export function parseTaskInventoryThread(
 
 export function parseTaskInventoryPage(
   result: unknown,
-  target: Pick<DiscoveryTarget, "source" | "accountId" | "accountLabel">,
+  target: Pick<DiscoveryTarget, "source" | "accountId" | "storeId" | "accountLabel">,
 ): { items: TaskInventoryItem[]; nextCursor: string | null } {
   if (!result || typeof result !== "object") return { items: [], nextCursor: null };
   const page = result as RawThreadPage;
@@ -501,11 +508,15 @@ async function readSourceIdentity(
     providerAccountId = safeString(root?.accountId, 300);
   }
 
+  const identityKey = providerAccountId
+    ? createHash("sha256").update(providerAccountId, "utf8").digest("hex")
+    : null;
   return {
     providerAccountId,
     connectedEmail,
     planType,
-    identityVerified: providerAccountId !== null,
+    identityKey,
+    identityVerified: identityKey !== null,
   };
 }
 
@@ -589,7 +600,7 @@ function normalizePathKey(path: string): string {
   return process.platform === "win32" ? normalize(absolute).toLowerCase() : normalize(absolute);
 }
 
-function discoveryTargets(accounts: AccountProfile[]): DiscoveryTarget[] {
+function discoveryTargets(accounts: AccountTarget[]): DiscoveryTarget[] {
   const targets: DiscoveryTarget[] = [];
   const seen = new Set<string>();
 
@@ -601,8 +612,10 @@ function discoveryTargets(accounts: AccountProfile[]): DiscoveryTarget[] {
     targets.push({
       source: "account",
       codexHome: account.codexHome,
-      accountId: account.id,
+      accountId: account.profileId,
+      storeId: account.storeId,
       accountLabel: account.displayName,
+      bindingState: account.bindingState,
     });
   }
 
@@ -613,23 +626,28 @@ function discoveryTargets(accounts: AccountProfile[]): DiscoveryTarget[] {
       source: "legacy_global",
       codexHome: globalHome,
       accountId: null,
+      storeId: null,
       accountLabel: "Legacy / Global",
+      bindingState: null,
     });
   }
 
   return targets;
 }
 
-export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<TaskInventorySnapshot> {
+export async function discoverCodexTasks(accounts: AccountTarget[]): Promise<TaskInventorySnapshot> {
   const generatedAt = new Date().toISOString();
   const accountStates: TaskInventoryAccountState[] = accounts
     .filter((account) => account.agent === "codex")
     .map((account) => ({
-      accountId: account.id,
+      accountId: account.profileId,
+      storeId: account.storeId,
       accountLabel: account.displayName,
       connectedEmail: null,
       planType: null,
+      identityKey: null,
       identityVerified: false,
+      bindingState: account.bindingState,
     }));
 
   const setAccountState = (target: DiscoveryTarget, identity: SourceIdentity) => {
@@ -637,10 +655,13 @@ export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<Ta
     const index = accountStates.findIndex((entry) => entry.accountId === target.accountId);
     const state: TaskInventoryAccountState = {
       accountId: target.accountId,
+      storeId: target.storeId ?? "",
       accountLabel: target.accountLabel,
       connectedEmail: identity.connectedEmail,
       planType: identity.planType,
+      identityKey: identity.identityKey,
       identityVerified: identity.identityVerified,
+      bindingState: target.bindingState ?? "unverified",
     };
     if (index >= 0) accountStates[index] = state;
     else accountStates.push(state);
@@ -655,6 +676,7 @@ export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<Ta
       errors: [{
         source: "legacy_global",
         accountId: null,
+        storeId: null,
         accountLabel: "Codex",
         detail: "Codex CLI was not found on PATH.",
       }],
@@ -694,6 +716,7 @@ export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<Ta
       errors.push({
         source: target.source,
         accountId: target.accountId,
+        storeId: target.storeId,
         accountLabel: target.accountLabel,
         detail: String((error as { message?: unknown })?.message ?? error).slice(0, 300),
       });

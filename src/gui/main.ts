@@ -9,7 +9,7 @@ import { clearLease, writeLease } from "./lease.js";
 import { exportDiagnosticSnapshot } from "./diagnostic-export.js";
 import { DIAGNOSTIC_CHANNEL } from "./channels.js";
 import { BUILD_IDENTITY, DIAGNOSTIC_LOG_PATH, DIAGNOSTIC_RECEIPT_PATH, DiagnosticTrace } from "./diagnostics.js";
-import { loadDiagnosticPreferences, loadPreferences, savePreferences } from "./preferences.js";
+import { activeAccountTargets, loadDiagnosticPreferences, loadPreferences, runnableAccountTargets, runnableTaskResumeSchedules, savePreferences } from "./preferences.js";
 import { requestWindowsSleep } from "./power-control.js";
 import { recordResume, recordSuspend } from "./power-state.js";
 import { resolveProcessMode } from "./routing.js";
@@ -21,7 +21,7 @@ import { GuiService } from "./service.js";
 import { registerQuitHandler } from "./shutdown.js";
 import type { ExitSource } from "./shutdown.js";
 import { appIconPath, trayIconPath } from "./tray-icon.js";
-import type { SavePayload, SchedulerTaskStatus } from "./types.js";
+import type { AccountTarget, SavePayload, SchedulerTaskStatus } from "./types.js";
 import * as configmod from "../core/config.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -50,7 +50,7 @@ if (mode.kind === "scheduled-task-resume") {
 } else if (mode.kind === "scheduled") {
   trace.emit("START_02_MODE_ROUTED", "scheduled");
   app.whenReady()
-    .then(() => runScheduled(mode.accountId, mode.scheduleId, new Date(), trace, {
+    .then(() => runScheduled(mode.profileId, mode.storeId, mode.scheduleId, new Date(), trace, {
       isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
       getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
       requestSleep: () => requestWindowsSleep(),
@@ -59,7 +59,7 @@ if (mode.kind === "scheduled-task-resume") {
     .catch(() => app.exit(1));
 } else if (mode.kind === "scheduled-dry-run") {
   trace.emit("START_02_MODE_ROUTED", "dry_run");
-  runScheduledDryRun(mode.accountId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
+  runScheduledDryRun(mode.profileId, mode.storeId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
 } else {
   trace.emit("START_02_MODE_ROUTED", "gui");
   startGui();
@@ -247,13 +247,13 @@ function startGui(): void {
       });
     }
     try {
-      taskResumeScheduler.sync(preferences.taskResumeSchedules);
+      taskResumeScheduler.sync(runnableTaskResumeSchedules(preferences));
     } catch {
       trace.emit("TASK_RESUME_SCHEDULER_SYNC_FAILED", "main");
     }
     if (preferences.schedulerEnabled) {
       try {
-        scheduler.install(preferences.accounts);
+        scheduler.install(runnableAccountTargets(preferences));
         if (!diagnosticStartup) writeLease(true);
       } catch {
         if (!diagnosticStartup) clearLease();
@@ -270,21 +270,29 @@ function startGui(): void {
 
     ipcMain.handle("automode:get-snapshot", () => service.snapshot());
     ipcMain.handle("automode:get-task-inventory", () => service.taskInventory());
-    ipcMain.handle("automode:resume-task", (_event, accountId: unknown, threadId: unknown, expectedUpdatedAt: unknown) =>
-      service.resumeTask(
-        String(accountId ?? ""),
-        String(threadId ?? ""),
-        typeof expectedUpdatedAt === "number" ? expectedUpdatedAt : null,
-      ));
+    ipcMain.handle("automode:resume-task", (
+      _event,
+      profileId: unknown,
+      storeId: unknown,
+      threadId: unknown,
+      expectedUpdatedAt: unknown,
+    ) => service.resumeTask(
+      String(profileId ?? ""),
+      String(storeId ?? ""),
+      String(threadId ?? ""),
+      typeof expectedUpdatedAt === "number" ? expectedUpdatedAt : null,
+    ));
     ipcMain.handle("automode:schedule-task-resume", (
       _event,
-      accountId: unknown,
+      profileId: unknown,
+      storeId: unknown,
       threadId: unknown,
       title: unknown,
       runAt: unknown,
       expectedUpdatedAt: unknown,
     ) => service.scheduleTaskResume(
-      String(accountId ?? ""),
+      String(profileId ?? ""),
+      String(storeId ?? ""),
       String(threadId ?? ""),
       String(title ?? ""),
       String(runAt ?? ""),
@@ -292,16 +300,20 @@ function startGui(): void {
     ));
     ipcMain.handle("automode:cancel-task-resume", (_event, scheduleId: unknown) =>
       service.cancelTaskResumeSchedule(String(scheduleId ?? "")));
-    ipcMain.handle("automode:account-rate-limit-status", (_event, accountId: unknown) =>
-      service.getAccountRateLimitStatus(String(accountId ?? "")));
+    ipcMain.handle("automode:account-rate-limit-status", (_event, profileId: unknown, storeId: unknown) =>
+      service.getAccountRateLimitStatus(String(profileId ?? ""), String(storeId ?? "")));
     ipcMain.handle("automode:save", (_event, payload: SavePayload) => service.save(payload));
     ipcMain.handle("automode:set-scheduler", (_event, enabled: boolean) => service.setScheduler(Boolean(enabled)));
     ipcMain.handle("automode:set-login", (_event, enabled: boolean) => setRunAtLogin(Boolean(enabled)));
     ipcMain.handle("automode:new-account-profile", () => service.newAccountProfile());
-    ipcMain.handle("automode:account-auth-status", (_event, accountId: unknown) =>
-      service.getAccountAuthStatus(String(accountId ?? "")));
-    ipcMain.handle("automode:account-connect", (_event, accountId: unknown) =>
-      service.connectAccount(String(accountId ?? "")));
+    ipcMain.handle("automode:new-account-store", (_event, profileId: unknown) =>
+      service.newAccountStore(String(profileId ?? "")));
+    ipcMain.handle("automode:account-auth-status", (_event, profileId: unknown, storeId: unknown) =>
+      service.getAccountAuthStatus(String(profileId ?? ""), storeId == null ? null : String(storeId)));
+    ipcMain.handle("automode:account-connect", (_event, profileId: unknown, storeId: unknown) =>
+      service.connectAccount(String(profileId ?? ""), storeId == null ? null : String(storeId)));
+    ipcMain.handle("automode:account-activate-store", (_event, profileId: unknown, storeId: unknown) =>
+      service.activateAccountStore(String(profileId ?? ""), String(storeId ?? "")));
     ipcMain.handle("automode:open-external-login", async (_event, rawUrl: unknown, rawCode: unknown) => {
       try {
         const url = new URL(String(rawUrl ?? ""));
@@ -326,10 +338,10 @@ function startGui(): void {
       return !error;
     });
     ipcMain.handle("automode:export-diagnostic", async () => {
-      let accounts = [] as ReturnType<typeof loadPreferences>["accounts"];
+      let accounts: AccountTarget[] = [];
       let accountPreferencesError: string | undefined;
       try {
-        accounts = loadDiagnosticPreferences(configmod.load()).accounts;
+        accounts = activeAccountTargets(loadDiagnosticPreferences(configmod.load()));
       } catch (error) {
         accountPreferencesError = String((error as { message?: unknown })?.message ?? error);
       }
