@@ -80,6 +80,13 @@ export class GuiService {
       payload.config.ping.catchup_minutes = primary.catchupMinutes ?? payload.config.ping.catchup_minutes;
     }
     configmod.save(payload.config);
+    const resumableAccounts = new Set(
+      payload.preferences.accounts
+        .filter((account) => account.enabled && account.agent === "codex" && Boolean(account.codexHome))
+        .map((account) => account.id),
+    );
+    payload.preferences.taskResumeSchedules = payload.preferences.taskResumeSchedules
+      .filter((schedule) => resumableAccounts.has(schedule.accountId));
     savePreferences(payload.preferences);
     this.taskResumeScheduler.sync(payload.preferences.taskResumeSchedules);
     if (payload.preferences.schedulerEnabled) {
