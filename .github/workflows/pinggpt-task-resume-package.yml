@@ -6,6 +6,10 @@ on:
     branches:
       - pinggpt-task-discovery-001
 
+concurrency:
+  group: pinggpt-task-resume-package-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
