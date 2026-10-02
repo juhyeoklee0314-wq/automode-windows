@@ -1,10 +1,44 @@
 import type { Config } from "../core/config.js";
 
+export type AccountStoreBindingState =
+  | "ready"
+  | "pending"
+  | "needs_verification"
+  | "migration_review"
+  | "account_mismatch"
+  | "unverified";
+
+export interface AccountStore {
+  id: string;
+  codexHome: string;
+  identityKey: string | null;
+  lastKnownEmail: string | null;
+  planType: string | null;
+  bindingState: AccountStoreBindingState;
+  message: string;
+  schedules: string[];
+  catchupMinutes?: number;
+  wakePc?: boolean;
+}
+
 export interface AccountProfile {
   id: string;
   displayName: string;
   enabled: boolean;
-  codexHome?: string;
+  agent: "claude" | "codex";
+  activeStoreId: string | null;
+  stores: AccountStore[];
+}
+
+export interface AccountTarget {
+  id: string;
+  profileId: string;
+  storeId: string;
+  displayName: string;
+  enabled: boolean;
+  codexHome: string;
+  identityKey: string | null;
+  bindingState: AccountStoreBindingState;
   message: string;
   schedules: string[];
   agent: "claude" | "codex";
@@ -12,22 +46,44 @@ export interface AccountProfile {
   wakePc?: boolean;
 }
 
-export type AccountAuthState = "connected" | "wrong_auth" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
+export type AccountAuthState =
+  | "connected"
+  | "wrong_auth"
+  | "not_connected"
+  | "cli_missing"
+  | "not_codex"
+  | "login_started"
+  | "profile_missing"
+  | "store_missing"
+  | "account_mismatch"
+  | "migration_review"
+  | "account_unverified";
 
 export interface AccountAuthStatus {
   accountId: string;
+  storeId?: string | null;
   state: AccountAuthState;
   detail: string;
   email?: string | null;
   planType?: string | null;
+  identityKey?: string | null;
   identityVerified?: boolean;
+  bindingState?: AccountStoreBindingState;
   loginUrl?: string;
   loginCode?: string;
 }
 
+export interface AccountActivationResult {
+  ok: boolean;
+  activeStoreId: string | null;
+  status: AccountAuthStatus;
+  snapshot: AppSnapshot;
+}
+
 export interface TaskResumeSchedule {
   id: string;
-  accountId: string;
+  profileId: string;
+  storeId: string;
   threadId: string;
   title: string;
   runAt: string;
@@ -40,7 +96,7 @@ export interface TaskResumeSchedule {
 }
 
 export interface GuiPreferences {
-  schemaVersion: 1;
+  schemaVersion: 2;
   runAtLogin: boolean;
   schedulerEnabled: boolean;
   accounts: AccountProfile[];
@@ -65,16 +121,20 @@ export type TaskResumeEligibility =
 
 export interface TaskInventoryAccountState {
   accountId: string;
+  storeId: string;
   accountLabel: string;
   connectedEmail: string | null;
   planType: string | null;
+  identityKey: string | null;
   identityVerified: boolean;
+  bindingState: AccountStoreBindingState;
 }
 
 export interface TaskInventoryItem {
   id: string;
   source: TaskInventorySource;
   accountId: string | null;
+  storeId: string | null;
   accountLabel: string;
   title: string;
   preview: string;
@@ -95,6 +155,7 @@ export interface TaskInventoryItem {
 export interface TaskInventorySourceError {
   source: TaskInventorySource;
   accountId: string | null;
+  storeId: string | null;
   accountLabel: string;
   detail: string;
 }
@@ -117,6 +178,7 @@ export type TaskResumeStatus =
 
 export interface TaskResumeResult {
   accountId: string;
+  storeId?: string;
   threadId: string;
   action: TaskResumeAction;
   status: TaskResumeStatus;
@@ -126,6 +188,7 @@ export interface TaskResumeResult {
 
 export interface AccountRateLimitStatus {
   accountId: string;
+  storeId?: string;
   ordinaryUsageAllowed: boolean | null;
   primaryUsedPercent: number | null;
   primaryResetsAt: number | null;
@@ -168,16 +231,18 @@ export interface DiagnosticExportResult {
 export interface AutomodeApi {
   getSnapshot(): Promise<AppSnapshot>;
   getTaskInventory(): Promise<TaskInventorySnapshot>;
-  resumeTask(accountId: string, threadId: string, expectedUpdatedAt: number | null): Promise<TaskResumeResult>;
-  scheduleTaskResume(accountId: string, threadId: string, title: string, runAt: string, expectedUpdatedAt: number | null): Promise<AppSnapshot>;
+  resumeTask(profileId: string, storeId: string, threadId: string, expectedUpdatedAt: number | null): Promise<TaskResumeResult>;
+  scheduleTaskResume(profileId: string, storeId: string, threadId: string, title: string, runAt: string, expectedUpdatedAt: number | null): Promise<AppSnapshot>;
   cancelTaskResumeSchedule(scheduleId: string): Promise<AppSnapshot>;
-  getAccountRateLimitStatus(accountId: string): Promise<AccountRateLimitStatus>;
+  getAccountRateLimitStatus(profileId: string, storeId: string): Promise<AccountRateLimitStatus>;
   save(payload: SavePayload): Promise<AppSnapshot>;
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;
   newAccountProfile(): Promise<AccountProfile>;
-  getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus>;
-  connectAccount(accountId: string): Promise<AccountAuthStatus>;
+  newAccountStore(profileId: string): Promise<AccountStore>;
+  getAccountAuthStatus(profileId: string, storeId?: string | null): Promise<AccountAuthStatus>;
+  connectAccount(profileId: string, storeId?: string | null): Promise<AccountAuthStatus>;
+  activateAccountStore(profileId: string, storeId: string): Promise<AccountActivationResult>;
   openExternalLogin(url: string, code: string): Promise<boolean>;
   doctor(): Promise<DoctorCheck[]>;
   readLog(): Promise<string>;
