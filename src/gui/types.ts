@@ -25,11 +25,26 @@ export interface AccountAuthStatus {
   loginCode?: string;
 }
 
+export interface TaskResumeSchedule {
+  id: string;
+  accountId: string;
+  threadId: string;
+  title: string;
+  runAt: string;
+  expectedUpdatedAt: number | null;
+  wakePc: boolean;
+  enabled: boolean;
+  createdAt: string;
+  completedAt?: string | null;
+  lastStatus?: TaskResumeResult["status"] | null;
+}
+
 export interface GuiPreferences {
   schemaVersion: 1;
   runAtLogin: boolean;
   schedulerEnabled: boolean;
   accounts: AccountProfile[];
+  taskResumeSchedules: TaskResumeSchedule[];
 }
 
 export interface SchedulerTaskStatus {
@@ -76,6 +91,34 @@ export interface TaskInventorySnapshot {
   errors: TaskInventorySourceError[];
 }
 
+export type TaskResumeAction = "wait" | "continue" | "replay" | "abort";
+export type TaskResumeStatus =
+  | "completed"
+  | "already_running"
+  | "history_changed"
+  | "turn_failed"
+  | "rejected"
+  | "error";
+
+export interface TaskResumeResult {
+  accountId: string;
+  threadId: string;
+  action: TaskResumeAction;
+  status: TaskResumeStatus;
+  detail: string;
+  turnId: string | null;
+}
+
+export interface AccountRateLimitStatus {
+  accountId: string;
+  ordinaryUsageAllowed: boolean | null;
+  primaryUsedPercent: number | null;
+  primaryResetsAt: number | null;
+  secondaryUsedPercent: number | null;
+  secondaryResetsAt: number | null;
+  suggestedResetAt: number | null;
+}
+
 export interface AppSnapshot {
   config: Config;
   preferences: GuiPreferences;
@@ -110,6 +153,10 @@ export interface DiagnosticExportResult {
 export interface AutomodeApi {
   getSnapshot(): Promise<AppSnapshot>;
   getTaskInventory(): Promise<TaskInventorySnapshot>;
+  resumeTask(accountId: string, threadId: string, expectedUpdatedAt: number | null): Promise<TaskResumeResult>;
+  scheduleTaskResume(accountId: string, threadId: string, title: string, runAt: string, expectedUpdatedAt: number | null): Promise<AppSnapshot>;
+  cancelTaskResumeSchedule(scheduleId: string): Promise<AppSnapshot>;
+  getAccountRateLimitStatus(accountId: string): Promise<AccountRateLimitStatus>;
   save(payload: SavePayload): Promise<AppSnapshot>;
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;
