@@ -227,6 +227,40 @@ describe("task discovery safety boundary", () => {
     assert.match(styles, /\.task-account-tabs\{/);
   });
 
+  it("uses local profile names for top tabs and adds Automation account filtering", () => {
+    const html = source("src/gui/renderer/index.html");
+    const renderer = source("src/gui/renderer/app.js");
+    const styles = source("src/gui/renderer/styles.css");
+
+    assert.match(html, /id="automation-account-tabs"/);
+    assert.match(renderer, /automationAccountFilter/);
+    assert.match(renderer, /automationProfileName/);
+    assert.match(renderer, /label: account\.displayName \|\| account\.id/);
+    assert.match(renderer, /label: item\.accountLabel \|\| item\.accountId/);
+    assert.match(renderer, /account-filter-hidden/);
+    assert.match(styles, /\.account-filter-hidden\{display:none!important\}/);
+    assert.doesNotMatch(renderer, /label:\s*\(account\.displayName \|\| account\.id\) \+ ' · ' \+ connected/);
+  });
+
+  it("refreshes task ownership after reconnect and keeps manual refresh fresh", () => {
+    const renderer = source("src/gui/renderer/app.js");
+    const discovery = source("src/gui/codex-task-discovery.ts");
+
+    const pollAt = renderer.indexOf("async function pollAuthStatus");
+    const reconnectRefreshAt = renderer.indexOf('refreshTasks({ source: "reconnect", quiet: true })', pollAt);
+    assert.ok(pollAt >= 0);
+    assert.ok(reconnectRefreshAt > pollAt);
+    assert.match(renderer, /\$\("refresh-tasks"\)\.onclick = \(\) => refreshTasks\(\{ source: "manual" \}\)/);
+    assert.match(renderer, /window\.automode\.getTaskInventory\(\)/);
+
+    const listAt = discovery.indexOf("async function listSource");
+    const identityAt = discovery.indexOf("const identity = await readSourceIdentity", listAt);
+    const noDbReturnAt = discovery.indexOf("if (!stateDbExists) return { items: [], identity };", listAt);
+    assert.ok(listAt >= 0);
+    assert.ok(identityAt > listAt);
+    assert.ok(noDbReturnAt > identityAt);
+  });
+
   it("sorts and filters task inventory locally without reclassifying ownership", () => {
     const renderer = source("src/gui/renderer/app.js");
     assert.match(renderer, /\.filter\(taskMatchesFilter\)/);
