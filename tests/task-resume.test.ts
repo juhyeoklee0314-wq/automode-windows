@@ -107,7 +107,7 @@ describe("task resume wiring safety", () => {
   it("keeps legacy/global rows non-resumable in the renderer", () => {
     const renderer = source("src/gui/renderer/app.js");
     assert.match(renderer, /Cross-account unavailable/);
-    assert.match(renderer, /resumeEligibility === "same_profile_candidate"/);
+    assert.match(renderer, /resumeEligibility === ['"]same_profile_candidate['"]/);
     assert.match(renderer, /getAccountRateLimitStatus/);
     assert.match(renderer, /scheduleTaskResume/);
   });
