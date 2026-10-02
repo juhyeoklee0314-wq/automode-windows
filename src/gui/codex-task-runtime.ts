@@ -546,7 +546,8 @@ export async function resumeCodexTask(
 
     const started = await startTurn(session, threadId, input);
     return result(
-      account.id,
+      account.profileId,
+      account.storeId,
       threadId,
       decision.action,
       started.status === "completed" ? "completed" : "turn_failed",
