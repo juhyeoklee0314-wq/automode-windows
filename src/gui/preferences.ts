@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { Config } from "../core/config.js";
 import { stateDir } from "../core/config.js";
-import type { AccountProfile, GuiPreferences } from "./types.js";
+import type { AccountProfile, GuiPreferences, TaskResumeSchedule } from "./types.js";
 
 export const preferencesPath = (): string => join(stateDir(), "gui-preferences.json");
 
@@ -39,6 +39,7 @@ export function defaults(config: Config): GuiPreferences {
     schemaVersion: 1,
     runAtLogin: false,
     schedulerEnabled: false,
+    taskResumeSchedules: [],
     accounts: [{
       id: "default",
       displayName: "Default profile",
@@ -70,6 +71,39 @@ export function newAccountProfile(config: Config, existing: AccountProfile[]): A
   };
 }
 
+function projectTaskResumeSchedules(raw: Partial<GuiPreferences>, accountIds: Set<string>): TaskResumeSchedule[] {
+  if (!Array.isArray(raw.taskResumeSchedules)) return [];
+  const seen = new Set<string>();
+  const projected: TaskResumeSchedule[] = [];
+  for (const entry of raw.taskResumeSchedules) {
+    const id = String(entry?.id ?? "").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 64);
+    const accountId = String(entry?.accountId ?? "");
+    const threadId = String(entry?.threadId ?? "");
+    const runAt = String(entry?.runAt ?? "");
+    if (!id || seen.has(id) || !accountIds.has(accountId)) continue;
+    if (!/^[0-9A-Fa-f-]{36}$/.test(threadId)) continue;
+    const when = new Date(runAt);
+    if (!Number.isFinite(when.getTime())) continue;
+    seen.add(id);
+    projected.push({
+      id,
+      accountId,
+      threadId,
+      title: String(entry?.title ?? "Codex task").slice(0, 240),
+      runAt: when.toISOString(),
+      expectedUpdatedAt: Number.isFinite(Number(entry?.expectedUpdatedAt)) ? Number(entry?.expectedUpdatedAt) : null,
+      wakePc: entry?.wakePc === true,
+      enabled: entry?.enabled === true,
+      createdAt: Number.isFinite(new Date(String(entry?.createdAt ?? "")).getTime())
+        ? new Date(String(entry?.createdAt)).toISOString()
+        : new Date().toISOString(),
+      completedAt: entry?.completedAt ? String(entry.completedAt) : null,
+      lastStatus: entry?.lastStatus ?? null,
+    });
+  }
+  return projected;
+}
+
 function projectPreferences(raw: Partial<GuiPreferences>, config: Config): GuiPreferences {
   const base = defaults(config);
   const source = Array.isArray(raw.accounts) && raw.accounts.length ? raw.accounts : base.accounts;
@@ -99,6 +133,7 @@ function projectPreferences(raw: Partial<GuiPreferences>, config: Config): GuiPr
     runAtLogin: Boolean(raw.runAtLogin),
     schedulerEnabled: Boolean(raw.schedulerEnabled),
     accounts,
+    taskResumeSchedules: projectTaskResumeSchedules(raw, new Set(accounts.map((account) => account.id))),
   };
 }
 
