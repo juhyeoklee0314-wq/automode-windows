@@ -8,7 +8,7 @@ import type { AccountProfile, AccountRateLimitStatus, TaskResumeResult } from ".
 
 const RPC_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_MS = 6 * 60 * 60 * 1000;
-const MAX_CAPTURE = 2 * 1024 * 1024;
+const MAX_RPC_LINE_BUFFER = 8 * 1024 * 1024;
 
 interface RpcMessage {
   id?: string | number;
@@ -21,7 +21,6 @@ interface RpcMessage {
 interface Session {
   child: ReturnType<typeof spawn>;
   buffer: string;
-  captured: number;
   pending: Map<string, (message: RpcMessage) => void>;
   notifications: RpcMessage[];
 }
@@ -90,7 +89,6 @@ function startSession(account: AccountProfile): Promise<Session> {
     const session: Session = {
       child,
       buffer: "",
-      captured: 0,
       pending: new Map(),
       notifications: [],
     };
@@ -108,12 +106,11 @@ function startSession(account: AccountProfile): Promise<Session> {
       resolvePromise(session);
     });
     child.stdout?.on("data", (chunk: Buffer) => {
-      session.captured += chunk.length;
-      if (session.captured > MAX_CAPTURE) {
+      session.buffer += chunk.toString("utf8");
+      if (session.buffer.length > MAX_RPC_LINE_BUFFER && !session.buffer.includes("\n")) {
         stopSession(session);
         return;
       }
-      session.buffer += chunk.toString("utf8");
       let newline = session.buffer.indexOf("\n");
       while (newline >= 0) {
         const line = session.buffer.slice(0, newline).trim();
@@ -140,12 +137,11 @@ function startSession(account: AccountProfile): Promise<Session> {
           }
           continue;
         }
-        if (message.method) session.notifications.push(message);
+        if (message.method === "turn/completed") session.notifications.push(message);
       }
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      session.captured += chunk.length;
-      if (session.captured > MAX_CAPTURE) stopSession(session);
+    child.stderr?.on("data", () => {
+      // Runtime stderr is intentionally not retained; provider diagnostics stay in provider-owned logs.
     });
   });
 }
