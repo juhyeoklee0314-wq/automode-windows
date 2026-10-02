@@ -268,6 +268,8 @@ describe("task discovery safety boundary", () => {
     assert.match(workflow, /Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1\.06_RuntimePatch\.zip/);
     assert.match(workflow, /Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1\.06_DeliveryBundle\.zip/);
     assert.match(workflow, /PingGPT_R1\.06_DeliveryReceipt\.txt/);
+    assert.match(workflow, /powershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass/);
+    assert.match(workflow, /POWERSHELL51_PARSE=PASS/);
     assert.match(workflow, /REEXTRACT_VERIFY=PASS/);
     assert.match(workflow, /FROZEN_AFTER_VERIFY=YES/);
     assert.match(workflow, /pinggpt-r106-delivery-bundle/);
