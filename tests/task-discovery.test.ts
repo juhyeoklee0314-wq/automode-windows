@@ -101,11 +101,13 @@ describe("Codex task inventory parsing", () => {
       }),
     ].join("\n");
 
-    const item = parseRolloutInventoryText(text, 1_759_407_192, accountTarget);
+    const item = parseRolloutInventoryText(text, 1_759_407_192.987, accountTarget);
     assert.ok(item);
     assert.equal(item.id, "01a0fc88-6926-7d61-8ca9-b71b7dd898e3");
     assert.equal(item.sessionSource, "exec");
     assert.equal(item.model, "gpt-5.6-sol");
+    assert.equal(item.updatedAt, 1_759_407_192);
+    assert.equal(item.recencyAt, 1_759_407_192);
     assert.match(item.title, /PINGGPT_RESUME_TEST/);
     assert.equal(item.resumeEligibility, "same_profile_candidate");
     assert.equal("path" in item, false);
