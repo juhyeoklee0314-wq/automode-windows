@@ -113,6 +113,13 @@ describe("task resume wiring safety", () => {
     assert.match(runtime, /Task rollout is outside the selected account store/);
   });
 
+  it("prunes resume schedules that no longer have an enabled Codex account", () => {
+    const service = source("src/gui/service.ts");
+    assert.match(service, /resumableAccounts/);
+    assert.match(service, /taskResumeSchedules = payload\.preferences\.taskResumeSchedules/);
+    assert.match(service, /filter\(\(schedule\) => resumableAccounts\.has\(schedule\.accountId\)\)/);
+  });
+
   it("uses official resume, turns-list, revert, and turn-start APIs", () => {
     const runtime = source("src/gui/codex-task-runtime.ts");
     assert.match(runtime, /"thread\/resume"/);
