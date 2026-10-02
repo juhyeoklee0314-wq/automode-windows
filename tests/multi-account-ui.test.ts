@@ -371,7 +371,7 @@ describe("R1.07 account-management GUI wiring", () => {
     const discovery = service.indexOf("await discoverCodexTasks([account])", start);
     const mismatch = service.indexOf("const hasMismatch", start);
     const duplicate = service.indexOf("const duplicate", start);
-    const commit = service.indexOf("profile.activeStoreId = store.id", start);
+    const commit = service.indexOf("profile.activeStoreId = store.id", duplicate);
     assert.ok(start >= 0);
     assert.ok(auth > start);
     assert.ok(discovery > auth);
