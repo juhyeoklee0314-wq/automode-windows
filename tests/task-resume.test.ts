@@ -133,8 +133,7 @@ describe("task resume wiring safety", () => {
   it("keeps one-shot schedules bound to the exact active store", () => {
     const service = source("src/gui/service.ts");
     const runner = source("src/gui/scheduled-task-resume.ts");
-    assert.match(service, /schedule\.profileId/);
-    assert.match(service, /schedule\.storeId/);
+    assert.match(service, /profileId,\s*storeId,\s*threadId/);
     assert.match(runner, /profile\.activeStoreId !== schedule\.storeId/);
     assert.match(runner, /account\.bindingState !== "ready"/);
   });
