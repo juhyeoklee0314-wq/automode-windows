@@ -69,6 +69,11 @@ export async function runScheduledTaskResume(
   const nowMs = now.getTime();
   if (!Number.isFinite(dueAt)) return { code: 64, result: null };
   if (nowMs + EARLY_TOLERANCE_MS < dueAt) return { code: 75, result: null };
+
+  const wokeForResume = schedule.wakePc === true && recentlyResumedFromSuspend(Date.now(), 180_000);
+  const idleBaselineAt = Date.now();
+  const idleBaseline = wokeForResume ? readIdle(runtime) : null;
+
   if (nowMs - dueAt > MAX_CATCHUP_MS) {
     schedule.enabled = false;
     schedule.completedAt = now.toISOString();
@@ -76,20 +81,19 @@ export async function runScheduledTaskResume(
     savePreferences(preferences);
     onConsumed?.(schedule.id);
     log(`scheduled task resume expired without execution: ${schedule.id}`);
+    await maybeReturnToSleep(wokeForResume, idleBaseline, idleBaselineAt, runtime);
     return { code: 75, result: null };
   }
 
   const account = preferences.accounts.find((entry) =>
     entry.id === schedule.accountId && entry.enabled && entry.agent === "codex");
-  const wokeForResume = schedule.wakePc === true && recentlyResumedFromSuspend(Date.now(), 180_000);
-  const idleBaselineAt = Date.now();
-  const idleBaseline = wokeForResume ? readIdle(runtime) : null;
   if (!account) {
     schedule.enabled = false;
     schedule.completedAt = now.toISOString();
     schedule.lastStatus = "rejected";
     savePreferences(preferences);
     onConsumed?.(schedule.id);
+    await maybeReturnToSleep(wokeForResume, idleBaseline, idleBaselineAt, runtime);
     return { code: 64, result: null };
   }
 
