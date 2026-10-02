@@ -40,6 +40,42 @@ export interface SchedulerTaskStatus {
   enabled: boolean;
 }
 
+export type TaskInventorySource = "account" | "legacy_global";
+export type TaskResumeEligibility = "same_profile_candidate" | "legacy_unassigned";
+
+export interface TaskInventoryItem {
+  id: string;
+  source: TaskInventorySource;
+  accountId: string | null;
+  accountLabel: string;
+  title: string;
+  preview: string;
+  cwd: string | null;
+  model: string | null;
+  modelProvider: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  recencyAt: number | null;
+  status: string;
+  historyMode: string;
+  sessionSource: string;
+  originator: string | null;
+  resumeEligibility: TaskResumeEligibility;
+}
+
+export interface TaskInventorySourceError {
+  source: TaskInventorySource;
+  accountId: string | null;
+  accountLabel: string;
+  detail: string;
+}
+
+export interface TaskInventorySnapshot {
+  generatedAt: string;
+  items: TaskInventoryItem[];
+  errors: TaskInventorySourceError[];
+}
+
 export interface AppSnapshot {
   config: Config;
   preferences: GuiPreferences;
@@ -73,6 +109,7 @@ export interface DiagnosticExportResult {
 
 export interface AutomodeApi {
   getSnapshot(): Promise<AppSnapshot>;
+  getTaskInventory(): Promise<TaskInventorySnapshot>;
   save(payload: SavePayload): Promise<AppSnapshot>;
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;
