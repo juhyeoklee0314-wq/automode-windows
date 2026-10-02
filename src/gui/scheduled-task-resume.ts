@@ -1,12 +1,50 @@
 import * as configmod from "../core/config.js";
 import { createLogger } from "../core/log.js";
-import { acquireExecutionLock } from "./lease.js";
+import { acquireExecutionLock, activeExecutionLockCount } from "./lease.js";
+import { recentlyResumedFromSuspend } from "./power-state.js";
 import { loadPreferences, savePreferences } from "./preferences.js";
 import { resumeCodexTask } from "./codex-task-runtime.js";
 import type { TaskResumeResult } from "./types.js";
 
 const MAX_CATCHUP_MS = 180 * 60 * 1000;
 const EARLY_TOLERANCE_MS = 60 * 1000;
+const RETURN_TO_SLEEP_GRACE_MS = 15_000;
+const IDLE_TOLERANCE_SECONDS = 3;
+
+export interface ScheduledTaskResumeRuntime {
+  isOnBatteryPower?: () => boolean;
+  getSystemIdleTime?: () => number;
+  requestSleep?: () => boolean;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function readIdle(runtime: ScheduledTaskResumeRuntime): number | null {
+  try {
+    const value = runtime.getSystemIdleTime?.();
+    return Number.isFinite(value) ? Math.max(0, Number(value)) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function maybeReturnToSleep(
+  shouldReturn: boolean,
+  idleBaseline: number | null,
+  idleBaselineAt: number,
+  runtime: ScheduledTaskResumeRuntime,
+): Promise<void> {
+  if (!shouldReturn || idleBaseline === null || !runtime.requestSleep || !runtime.getSystemIdleTime) return;
+  if (activeExecutionLockCount() > 0) return;
+  await sleep(RETURN_TO_SLEEP_GRACE_MS);
+  if (activeExecutionLockCount() > 0) return;
+  const idleNow = readIdle(runtime);
+  if (idleNow === null) return;
+  const elapsedSeconds = Math.max(0, (Date.now() - idleBaselineAt) / 1000);
+  const idleGrowth = idleNow - idleBaseline;
+  if (idleGrowth + IDLE_TOLERANCE_SECONDS < elapsedSeconds) return;
+  runtime.requestSleep();
+}
 
 export interface ScheduledTaskResumeOutcome {
   code: number;
@@ -17,12 +55,15 @@ export async function runScheduledTaskResume(
   scheduleId: string,
   now = new Date(),
   onConsumed?: (scheduleId: string) => void,
+  runtime: ScheduledTaskResumeRuntime = {},
 ): Promise<ScheduledTaskResumeOutcome> {
   const log = createLogger();
   const config = configmod.load();
   const preferences = loadPreferences(config);
   const schedule = preferences.taskResumeSchedules.find((entry) => entry.id === scheduleId && entry.enabled);
   if (!schedule) return { code: 64, result: null };
+
+  if (runtime.isOnBatteryPower?.()) return { code: 75, result: null };
 
   const dueAt = new Date(schedule.runAt).getTime();
   const nowMs = now.getTime();
@@ -40,6 +81,9 @@ export async function runScheduledTaskResume(
 
   const account = preferences.accounts.find((entry) =>
     entry.id === schedule.accountId && entry.enabled && entry.agent === "codex");
+  const wokeForResume = schedule.wakePc === true && recentlyResumedFromSuspend(Date.now(), 180_000);
+  const idleBaselineAt = Date.now();
+  const idleBaseline = wokeForResume ? readIdle(runtime) : null;
   if (!account) {
     schedule.enabled = false;
     schedule.completedAt = now.toISOString();
@@ -58,6 +102,8 @@ export async function runScheduledTaskResume(
   } finally {
     release();
   }
+
+  await maybeReturnToSleep(wokeForResume, idleBaseline, idleBaselineAt, runtime);
 
   schedule.enabled = false;
   schedule.completedAt = new Date().toISOString();
