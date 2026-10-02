@@ -143,20 +143,9 @@ jobs:
 
           $applyText | Set-Content -LiteralPath $applyPath -Encoding UTF8
 
-          $parserCheckPath = Join-Path $PWD 'parse-r106-apply.ps1'
-          @'
-param([Parameter(Mandatory=$true)][string]$Path)
-$tokens = $null
-$parseErrors = $null
-[System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$parseErrors) | Out-Null
-if ($parseErrors.Count -gt 0) {
-    foreach ($entry in $parseErrors) { Write-Error $entry.Message }
-    exit 1
-}
-exit 0
-'@ | Set-Content -LiteralPath $parserCheckPath -Encoding UTF8
-
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $parserCheckPath -Path $applyPath
+          $escapedApplyPath = $applyPath.Replace("'", "''")
+          $parseCommand = '$tokens=$null;$parseErrors=$null;[System.Management.Automation.Language.Parser]::ParseFile(''' + $escapedApplyPath + ''',[ref]$tokens,[ref]$parseErrors)|Out-Null;if($parseErrors.Count -gt 0){$parseErrors|ForEach-Object{Write-Error $_.Message};exit 1};exit 0'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $parseCommand
           if ($LASTEXITCODE -ne 0) {
             throw 'Generated apply script failed Windows PowerShell 5.1 parse validation.'
           }
