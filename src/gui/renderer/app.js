@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 let snapshot;
 let taskInventorySnapshot = null;
 let taskAccountFilter = 'all';
+let automationAccountFilter = 'all';
 let taskSearchQuery = '';
 
 function showBanner(message, error = false) {
@@ -51,6 +52,7 @@ function render(data) {
     $(`${agent}-badge`).classList.toggle("ok", Boolean(found));
   }
   renderAccounts(p.accounts);
+  renderAutomationAccountTabs(p.accounts);
   renderTaskResumeSchedules(p.taskResumeSchedules || []);
   if (taskInventorySnapshot) renderTaskInventory(taskInventorySnapshot);
   const tasks = $("task-list");
@@ -90,6 +92,7 @@ function accountCard(account, saved = true) {
   nameInput.type = "text";
   nameInput.maxLength = 80;
   nameInput.value = account.displayName;
+  nameInput.oninput = () => refreshAutomationTabLabels();
   nameLabel.append(nameInput);
 
   const enableWrap = document.createElement("div");
@@ -111,8 +114,11 @@ function accountCard(account, saved = true) {
   deleteButton.className = "remove small delete-account";
   deleteButton.textContent = "Delete";
   deleteButton.onclick = () => {
+    const removedId = card.dataset.accountId;
     card.remove();
+    if (automationAccountFilter === removedId) automationAccountFilter = "all";
     ensureEmptyAccountsMessage();
+    refreshAutomationTabLabels();
     showBanner("Profile removed from the draft. Save changes to apply.");
   };
 
@@ -265,6 +271,64 @@ function renderAccounts(accounts) {
   });
 }
 
+function automationProfileName(account) {
+  return String(account?.displayName || account?.id || "Profile");
+}
+
+function applyAutomationAccountFilter() {
+  const cards = [...$("account-list").querySelectorAll(".account-card")];
+  for (const card of cards) {
+    const visible = automationAccountFilter === "all" || card.dataset.accountId === automationAccountFilter;
+    card.classList.toggle("account-filter-hidden", !visible);
+  }
+}
+
+function renderAutomationAccountTabs(accounts = snapshot?.preferences?.accounts || []) {
+  const root = $("automation-account-tabs");
+  if (!root) return;
+
+  const valid = new Set(["all", ...accounts.map((account) => account.id)]);
+  if (!valid.has(automationAccountFilter)) automationAccountFilter = "all";
+
+  root.replaceChildren();
+
+  const addTab = (id, label, count = null) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "task-account-tab" + (automationAccountFilter === id ? " active" : "");
+    button.dataset.automationFilter = id;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", automationAccountFilter === id ? "true" : "false");
+
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.append(text);
+
+    if (count !== null) {
+      const badge = document.createElement("span");
+      badge.className = "count";
+      badge.textContent = String(count);
+      button.append(badge);
+    }
+
+    button.onclick = () => {
+      automationAccountFilter = id;
+      renderAutomationAccountTabs(readAccounts());
+      applyAutomationAccountFilter();
+    };
+    root.append(button);
+  };
+
+  addTab("all", "All", accounts.length);
+  for (const account of accounts) addTab(account.id, automationProfileName(account));
+
+  applyAutomationAccountFilter();
+}
+
+function refreshAutomationTabLabels() {
+  renderAutomationAccountTabs(readAccounts());
+}
+
 function readAccounts() {
   return [...$("account-list").querySelectorAll(".account-card")].map((card, index) => {
     const schedules = [...card.querySelectorAll(".account-time")].map((input) => input.value).filter(Boolean);
@@ -399,7 +463,10 @@ async function pollAuthStatus(accountId) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const status = await refreshAuthStatus(accountId);
     if (!status || status.state === "cli_missing") return;
-    if (status.state === "connected" && status.identityVerified !== false) return;
+    if (status.state === "connected" && status.identityVerified !== false) {
+      await refreshTasks({ source: "reconnect", quiet: true });
+      return;
+    }
     if (status.state === "connected" && attempt >= 4) return;
   }
 }
@@ -467,12 +534,9 @@ function taskFilterOptions(data) {
   const configured = (snapshot?.preferences?.accounts || [])
     .filter((account) => account.agent === 'codex' && account.enabled !== false)
     .map((account) => {
-      const state = accountStates.get(account.id);
-      const connected = state?.connectedEmail
-        || (state?.identityVerified ? 'Connected' : 'Identity unverified');
       return {
         id: account.id,
-        label: (account.displayName || account.id) + ' · ' + connected,
+        label: account.displayName || account.id,
         count: counts.get(account.id) || 0,
       };
     });
@@ -480,12 +544,9 @@ function taskFilterOptions(data) {
   for (const item of data.items || []) {
     if (item.source !== 'account' || !item.accountId) continue;
     if (configured.some((account) => account.id === item.accountId)) continue;
-    const state = accountStates.get(item.accountId);
-    const connected = state?.connectedEmail
-      || (state?.identityVerified ? 'Connected' : 'Identity unverified');
     configured.push({
       id: item.accountId,
-      label: (item.accountLabel || item.accountId) + ' · ' + connected,
+      label: item.accountLabel || item.accountId,
       count: counts.get(item.accountId) || 0,
     });
   }
@@ -603,10 +664,11 @@ function taskState(item) {
   return { label: 'READY', className: 'ready' };
 }
 
-function syncTaskHeader(page) {
-  const tabs = $('task-account-tabs');
-  if (!tabs) return;
-  tabs.classList.toggle('hidden', page !== 'tasks');
+function syncAccountFilterHeader(page) {
+  const taskTabs = $('task-account-tabs');
+  const automationTabs = $('automation-account-tabs');
+  if (taskTabs) taskTabs.classList.toggle('hidden', page !== 'tasks');
+  if (automationTabs) automationTabs.classList.toggle('hidden', page !== 'automation');
 }
 
 function renderTaskResumeSchedules(schedules) {
@@ -901,21 +963,27 @@ function renderTaskInventory(data) {
   renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
 }
 
-async function refreshTasks() {
+async function refreshTasks(options = {}) {
   const button = $("refresh-tasks");
   const summary = $("task-inventory-summary");
-  button.disabled = true;
-  summary.textContent = "Reading Codex task stores…";
+  const quiet = options.quiet === true;
+  if (button) button.disabled = true;
+  if (summary) summary.textContent = "Reading fresh Codex task and account state…";
   try {
     const data = await window.automode.getTaskInventory();
     renderTaskInventory(data);
     renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
+    if (!quiet && options.source === "manual") {
+      showBanner("Tasks and connected account state refreshed.");
+    }
+    return data;
   } catch (error) {
     $("codex-task-list").replaceChildren();
-    summary.textContent = "Task inventory failed.";
-    showBanner(`Could not load tasks: ${error.message || error}`, true);
+    if (summary) summary.textContent = "Task inventory failed.";
+    if (!quiet) showBanner(`Could not load tasks: ${error.message || error}`, true);
+    return null;
   } finally {
-    button.disabled = false;
+    if (button) button.disabled = false;
   }
 }
 
@@ -924,9 +992,10 @@ document.querySelectorAll('.nav').forEach((button) => button.onclick = () => {
   button.classList.add('active');
   $('page-' + button.dataset.page).classList.add('active');
   $('page-title').textContent = button.textContent;
-  syncTaskHeader(button.dataset.page);
+  syncAccountFilterHeader(button.dataset.page);
   if (button.dataset.page === 'logs') refreshLog();
-  if (button.dataset.page === 'tasks') refreshTasks();
+  if (button.dataset.page === 'tasks') refreshTasks({ source: "page-open", quiet: true });
+  if (button.dataset.page === 'automation') renderAutomationAccountTabs(readAccounts());
 });
 
 $("add-account").onclick = async () => {
@@ -938,6 +1007,7 @@ $("add-account").onclick = async () => {
     account.displayName = `GPT Account ${currentCount + 1}`;
     $("account-list").append(accountCard(account, false));
     ensureEmptyAccountsMessage();
+    renderAutomationAccountTabs(readAccounts());
     showBanner("Account profile added. Save changes or press Connect to save and start login.");
   } catch (error) {
     showBanner(`Could not add account: ${error.message || error}`, true);
@@ -1003,7 +1073,7 @@ $("export-diagnostic").onclick = async () => {
     button.textContent = "진단 로그 저장";
   }
 };
-$("refresh-tasks").onclick = refreshTasks;
+$("refresh-tasks").onclick = () => refreshTasks({ source: "manual" });
 $("task-search").oninput = (event) => {
   taskSearchQuery = String(event.target.value || '');
   if (taskInventorySnapshot) renderTaskInventory(taskInventorySnapshot);
@@ -1015,6 +1085,6 @@ $("open-log").onclick = () => window.automode.openLogFolder();
 
 window.addEventListener("error", () => window.automode.rendererEvent("RENDERER_ERROR"));
 window.addEventListener("unhandledrejection", () => window.automode.rendererEvent("RENDERER_UNHANDLED_REJECTION"));
-syncTaskHeader(document.querySelector('.nav.active')?.dataset.page || 'overview');
+syncAccountFilterHeader(document.querySelector('.nav.active')?.dataset.page || 'overview');
 window.automode.getSnapshot().then(render).catch((error) => showBanner('Startup failed: ' + (error.message || error), true));
 window.automode.rendererReady();
