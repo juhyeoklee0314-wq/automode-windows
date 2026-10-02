@@ -222,6 +222,7 @@ export async function runScheduled(
     if (state.pingFired(identity)) {
       code = 0;
     } else {
+      let identityRejected = false;
       if (account.agent === "codex") {
         const auth = await codexAuthStatus(account);
         if (
@@ -237,27 +238,29 @@ export async function runScheduled(
             authState: auth.state,
           });
           code = 75;
-          return code;
+          identityRejected = true;
         }
       }
-      const env = accountPingEnvironment(account);
-      const unsetEnv = accountPingUnsetEnvironment(account);
-      trace?.emit("PING_07_PROFILE_SELECTED", "scheduled", {
-        agent: account.agent,
-        codexHomeMode: account.codexHome ? "account" : process.env.CODEX_HOME ? "inherited" : "default",
-        catchupMinutes,
-      });
-      code = await reliablePing(account.agent, account.message, log, {
-        env,
-        unsetEnv,
-        networkTimeoutMs: wokeForPingBatch ? 60_000 : 10_000,
-        onResolved: (path) => trace?.emit("PING_08_EXECUTABLE_RESOLVED", "scheduled", { agent: account.agent, path }),
-      });
-      if (code === 0) {
-        state.markPing(identity);
-        trace?.emit("PING_10_DEDUPE_COMMITTED", "scheduled", { identity, successSignal: "process_exit_0" });
-      } else {
-        trace?.emit("PING_10_FAILURE_NOT_COMMITTED", "scheduled", { identity, code });
+      if (!identityRejected) {
+        const env = accountPingEnvironment(account);
+        const unsetEnv = accountPingUnsetEnvironment(account);
+        trace?.emit("PING_07_PROFILE_SELECTED", "scheduled", {
+          agent: account.agent,
+          codexHomeMode: account.codexHome ? "account" : process.env.CODEX_HOME ? "inherited" : "default",
+          catchupMinutes,
+        });
+        code = await reliablePing(account.agent, account.message, log, {
+          env,
+          unsetEnv,
+          networkTimeoutMs: wokeForPingBatch ? 60_000 : 10_000,
+          onResolved: (path) => trace?.emit("PING_08_EXECUTABLE_RESOLVED", "scheduled", { agent: account.agent, path }),
+        });
+        if (code === 0) {
+          state.markPing(identity);
+          trace?.emit("PING_10_DEDUPE_COMMITTED", "scheduled", { identity, successSignal: "process_exit_0" });
+        } else {
+          trace?.emit("PING_10_FAILURE_NOT_COMMITTED", "scheduled", { identity, code });
+        }
       }
     }
   } finally {
