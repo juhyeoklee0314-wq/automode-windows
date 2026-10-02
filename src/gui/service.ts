@@ -65,6 +65,28 @@ function missingStoreStatus(accountId: string, storeId?: string | null): Account
   };
 }
 
+export function expireMissedTaskResumeSchedulesForStore(
+  preferences: GuiPreferences,
+  profileId: string,
+  storeId: string,
+  now = new Date(),
+): number {
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) return 0;
+  const completedAt = now.toISOString();
+  let expired = 0;
+  for (const schedule of preferences.taskResumeSchedules) {
+    if (!schedule.enabled || schedule.profileId !== profileId || schedule.storeId !== storeId) continue;
+    const runAt = new Date(schedule.runAt).getTime();
+    if (!Number.isFinite(runAt) || runAt > nowMs) continue;
+    schedule.enabled = false;
+    schedule.completedAt = completedAt;
+    schedule.lastStatus = "rejected";
+    expired += 1;
+  }
+  return expired;
+}
+
 export class GuiService {
   constructor(
     private readonly scheduler: WindowsScheduler,
@@ -418,10 +440,14 @@ export class GuiService {
       return { ok: false, activeStoreId: profile.activeStoreId, status, snapshot: this.snapshot() };
     }
 
+    const previousActiveStoreId = profile.activeStoreId;
     store.identityKey = auth.identityKey;
     store.lastKnownEmail = auth.email ?? store.lastKnownEmail;
     store.planType = auth.planType ?? store.planType;
     store.bindingState = "ready";
+    if (previousActiveStoreId !== store.id) {
+      expireMissedTaskResumeSchedulesForStore(preferences, profileId, store.id);
+    }
     profile.activeStoreId = store.id;
     savePreferences(preferences);
 
