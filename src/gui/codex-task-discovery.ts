@@ -78,6 +78,10 @@ function safeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
 function safeStatus(value: unknown): string {
   if (typeof value === "string") return value;
   if (!value || typeof value !== "object") return "unknown";
