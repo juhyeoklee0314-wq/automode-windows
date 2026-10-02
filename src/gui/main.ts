@@ -34,7 +34,16 @@ if (mode.kind === "scheduled-task-resume") {
   app.whenReady()
     .then(async () => {
       const resumeScheduler = new TaskResumeScheduler(schedulerExecutable(process.execPath));
-      const outcome = await runScheduledTaskResume(mode.scheduleId, new Date(), (scheduleId) => resumeScheduler.cancel(scheduleId));
+      const outcome = await runScheduledTaskResume(
+        mode.scheduleId,
+        new Date(),
+        (scheduleId) => resumeScheduler.cancel(scheduleId),
+        {
+          isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
+          getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
+          requestSleep: () => requestWindowsSleep(),
+        },
+      );
       app.exit(outcome.code);
     })
     .catch(() => app.exit(1));
