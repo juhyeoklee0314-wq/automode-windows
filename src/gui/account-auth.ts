@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 
 import { prepareSpawn, prepareStdioSpawn, resolveCodexNativeExecutable, which } from "../platform/command.js";
-import type { AccountAuthStatus, AccountProfile } from "./types.js";
+import type { AccountAuthStatus, AccountTarget } from "./types.js";
 
 const STATUS_TIMEOUT_MS = 12_000;
 const IDENTITY_TIMEOUT_MS = 10_000;
@@ -12,11 +13,20 @@ const MAX_CAPTURE = 64 * 1024;
 const activeLoginProcesses = new Map<string, ReturnType<typeof spawn>>();
 const activeLoginPrompts = new Map<string, CodexDeviceLoginPrompt>();
 
+function accountProcessKey(account: AccountTarget): string {
+  return `${account.profileId}:${account.storeId}`;
+}
+
+function providerIdentityKey(value: string | null): string | null {
+  return value ? createHash("sha256").update(value, "utf8").digest("hex") : null;
+}
+
 interface StatusResult { code: number; output: string }
 
 export interface CodexAccountIdentity {
   email: string | null;
   planType: string | null;
+  identityKey?: string | null;
 }
 
 export interface CodexDeviceLoginPrompt {
@@ -46,7 +56,7 @@ export function deviceLoginPendingStatus(accountId: string, prompt: CodexDeviceL
   };
 }
 
-function accountEnv(account: AccountProfile): NodeJS.ProcessEnv {
+function accountEnv(account: AccountTarget): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (account.codexHome) {
     env.CODEX_HOME = account.codexHome;
@@ -57,8 +67,8 @@ function accountEnv(account: AccountProfile): NodeJS.ProcessEnv {
   return env;
 }
 
-function baseStatus(account: AccountProfile, state: AccountAuthStatus["state"], detail: string): AccountAuthStatus {
-  return { accountId: account.id, state, detail };
+function baseStatus(account: AccountTarget, state: AccountAuthStatus["state"], detail: string): AccountAuthStatus {
+  return { accountId: account.profileId, storeId: account.storeId, state, detail, bindingState: account.bindingState };
 }
 
 function killTree(pid: number | undefined): void {
@@ -95,7 +105,7 @@ export function classifyCodexLoginStatus(accountId: string, code: number, output
   };
 }
 
-async function runStatus(command: string, account: AccountProfile): Promise<StatusResult> {
+async function runStatus(command: string, account: AccountTarget): Promise<StatusResult> {
   const prepared = prepareSpawn([command, "login", "status"]);
   return await new Promise<StatusResult>((resolve) => {
     const child = spawn(prepared.command, prepared.args, {
@@ -130,7 +140,7 @@ async function runStatus(command: string, account: AccountProfile): Promise<Stat
   });
 }
 
-async function readCodexAccountIdentity(command: string, account: AccountProfile): Promise<CodexAccountIdentity | null> {
+async function readCodexAccountIdentity(command: string, account: AccountTarget): Promise<CodexAccountIdentity | null> {
   const native = resolveCodexNativeExecutable(command);
   const prepared = native
     ? { command: native, args: ["app-server", "--listen", "stdio://"] }
@@ -141,6 +151,7 @@ async function readCodexAccountIdentity(command: string, account: AccountProfile
     let settled = false;
     let stdoutBuffer = "";
     let captured = 0;
+    let pendingIdentity: CodexAccountIdentity | null = null;
 
     const finish = (identity: CodexAccountIdentity | null) => {
       if (settled) return;
@@ -190,7 +201,24 @@ async function readCodexAccountIdentity(command: string, account: AccountProfile
 
       if (message.id === "pinggpt-account") {
         if (message.error) return finish(null);
-        return finish(parseCodexAccountIdentity(message.result));
+        const identity = parseCodexAccountIdentity(message.result);
+        if (!identity) return finish(null);
+        pendingIdentity = identity;
+        send({
+          id: "pinggpt-account-limits",
+          method: "account/rateLimits/read",
+          params: { excludeResetCreditDetails: true },
+        });
+        return;
+      }
+
+      if (message.id === "pinggpt-account-limits") {
+        if (!pendingIdentity || message.error) return finish(pendingIdentity ? { ...pendingIdentity, identityKey: null } : null);
+        const root = message.result && typeof message.result === "object"
+          ? message.result as Record<string, unknown>
+          : null;
+        const rawId = typeof root?.accountId === "string" ? root.accountId.trim() : "";
+        return finish({ ...pendingIdentity, identityKey: providerIdentityKey(rawId || null) });
       }
     };
 
@@ -247,22 +275,31 @@ async function readCodexAccountIdentity(command: string, account: AccountProfile
   });
 }
 
-export async function codexAuthStatus(account: AccountProfile): Promise<AccountAuthStatus> {
+export async function codexAuthStatus(account: AccountTarget): Promise<AccountAuthStatus> {
   if (account.agent !== "codex") {
     return baseStatus(account, "not_codex", "Account uses Claude; Codex login is not required.");
   }
 
-  const pendingProcess = activeLoginProcesses.get(account.id);
-  const pendingPrompt = activeLoginPrompts.get(account.id);
+  const processKey = accountProcessKey(account);
+  const pendingProcess = activeLoginProcesses.get(processKey);
+  const pendingPrompt = activeLoginPrompts.get(processKey);
   if (pendingProcess && pendingPrompt && pendingProcess.exitCode === null) {
-    return deviceLoginPendingStatus(account.id, pendingPrompt);
+    return {
+      ...deviceLoginPendingStatus(account.profileId, pendingPrompt),
+      storeId: account.storeId,
+      bindingState: account.bindingState,
+    };
   }
 
   const resolved = which("codex");
   if (!resolved) return baseStatus(account, "cli_missing", "Codex CLI was not found on PATH.");
 
   const result = await runStatus(resolved, account);
-  const status = classifyCodexLoginStatus(account.id, result.code, result.output);
+  const status = {
+    ...classifyCodexLoginStatus(account.profileId, result.code, result.output),
+    storeId: account.storeId,
+    bindingState: account.bindingState,
+  };
   if (status.state !== "connected") return status;
 
   const identity = await readCodexAccountIdentity(resolved, account);
@@ -270,6 +307,7 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
     return {
       ...status,
       identityVerified: false,
+      identityKey: null,
       detail: "ChatGPT login is active, but Codex did not expose the account identity.",
     };
   }
@@ -278,14 +316,15 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
     ...status,
     email: identity.email,
     planType: identity.planType,
-    identityVerified: true,
+    identityKey: identity.identityKey ?? null,
+    identityVerified: Boolean(identity.identityKey),
     detail: identity.email
       ? `Connected as ${identity.email}.`
       : "ChatGPT login is active; Codex did not provide an email address.",
   };
 }
 
-export async function startCodexLogin(account: AccountProfile): Promise<AccountAuthStatus> {
+export async function startCodexLogin(account: AccountTarget): Promise<AccountAuthStatus> {
   if (account.agent !== "codex") {
     return baseStatus(account, "not_codex", "Switch this profile to Codex before connecting a ChatGPT account.");
   }
@@ -297,11 +336,12 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
 
   mkdirSync(account.codexHome, { recursive: true });
 
-  const previous = activeLoginProcesses.get(account.id);
+  const processKey = accountProcessKey(account);
+  const previous = activeLoginProcesses.get(processKey);
   if (previous?.pid) {
     killTree(previous.pid);
-    activeLoginProcesses.delete(account.id);
-    activeLoginPrompts.delete(account.id);
+    activeLoginProcesses.delete(processKey);
+    activeLoginPrompts.delete(processKey);
   }
 
   const native = resolveCodexNativeExecutable(resolved);
@@ -329,9 +369,11 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
     const inspectPrompt = () => {
       const prompt = parseCodexDeviceLoginPrompt(captured);
       if (prompt) {
-        activeLoginPrompts.set(account.id, prompt);
+        activeLoginPrompts.set(processKey, prompt);
         return finish({
-          accountId: account.id,
+          accountId: account.profileId,
+          storeId: account.storeId,
+          bindingState: account.bindingState,
           state: "login_started",
           detail: "Device login is ready. Sign in as the intended ChatGPT account and enter the one-time code.",
           loginUrl: prompt.loginUrl,
@@ -359,19 +401,19 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
       return finish(baseStatus(account, "not_connected", "Codex device login could not be started."));
     }
 
-    activeLoginProcesses.set(account.id, child);
+    activeLoginProcesses.set(processKey, child);
     child.stdout?.on("data", consume);
     child.stderr?.on("data", consume);
 
     child.once("error", () => {
-      activeLoginProcesses.delete(account.id);
-      activeLoginPrompts.delete(account.id);
+      activeLoginProcesses.delete(processKey);
+      activeLoginPrompts.delete(processKey);
       finish(baseStatus(account, "not_connected", "Codex device login process could not be started."));
     });
 
     child.once("close", (code) => {
-      activeLoginProcesses.delete(account.id);
-      activeLoginPrompts.delete(account.id);
+      activeLoginProcesses.delete(processKey);
+      activeLoginPrompts.delete(processKey);
       if (settled) return;
       const clean = stripAnsi(captured).trim();
       const detail = clean
@@ -381,8 +423,8 @@ export async function startCodexLogin(account: AccountProfile): Promise<AccountA
     });
 
     timer = setTimeout(() => {
-      activeLoginProcesses.delete(account.id);
-      activeLoginPrompts.delete(account.id);
+      activeLoginProcesses.delete(processKey);
+      activeLoginPrompts.delete(processKey);
       finish(baseStatus(account, "not_connected", "Timed out waiting for Codex device authorization instructions."));
     }, LOGIN_PROMPT_TIMEOUT_MS);
     timer?.unref();
