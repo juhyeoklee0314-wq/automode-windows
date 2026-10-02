@@ -3,7 +3,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { decideResumeRecovery } from "../src/gui/codex-task-runtime.js";
+import { chooseSuggestedResetAt, decideResumeRecovery } from "../src/gui/codex-task-runtime.js";
 import { resumeTaskName, TaskResumeScheduler } from "../src/gui/task-resume-scheduler.js";
 
 describe("task resume recovery policy", () => {
@@ -51,6 +51,22 @@ describe("task resume recovery policy", () => {
       action: "abort",
       reason: "replay_requires_paginated_history",
     });
+  });
+});
+
+describe("task reset scheduling policy", () => {
+  const nowMs = 1_000_000;
+
+  it("waits for the latest blocked window when multiple limits are exhausted", () => {
+    assert.equal(chooseSuggestedResetAt(false, 100, 2000, 100, 3000, nowMs), 3000);
+  });
+
+  it("uses the conservative latest reset when usage is blocked without an exact 100 percent window", () => {
+    assert.equal(chooseSuggestedResetAt(false, 99, 2000, 87, 3000, nowMs), 3000);
+  });
+
+  it("uses the next reset when usage is currently allowed", () => {
+    assert.equal(chooseSuggestedResetAt(true, 2, 2000, 87, 3000, nowMs), 2000);
   });
 });
 
