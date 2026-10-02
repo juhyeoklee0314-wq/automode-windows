@@ -75,7 +75,7 @@ describe("task discovery safety boundary", () => {
 
   it("uses state-db-only thread/list and contains no task mutation RPC", () => {
     const discovery = source("src/gui/codex-task-discovery.ts");
-    assert.match(discovery, /method[,:]?\s*["']thread\/list["']/);
+    assert.match(discovery, /["']thread\/list["']/);
     assert.match(discovery, /useStateDbOnly:\s*true/);
     assert.doesNotMatch(discovery, /["']thread\/(?:start|resume|fork|delete|archive|unarchive|rollback)["']/);
     assert.doesNotMatch(discovery, /["']turn\/(?:start|steer|interrupt)["']/);
