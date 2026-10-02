@@ -86,7 +86,7 @@ jobs:
                 Add-Content -LiteralPath $manifest -Encoding UTF8
             }
 
-          $zip = Join-Path $PWD 'Working_ZIP_PingGPT_261002_ProfileOwnership_R1.05_RuntimePatch.zip'
+          $zip = Join-Path $PWD 'Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_RuntimePatch.zip'
           if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
           Compress-Archive -LiteralPath (Join-Path $root 'payload'), $manifest -DestinationPath $zip -CompressionLevel Optimal
 
@@ -95,12 +95,130 @@ jobs:
           "ZIP_SIZE=$((Get-Item -LiteralPath $zip).Length)" | Add-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
           "COMMIT=$env:GITHUB_SHA" | Add-Content -LiteralPath 'PingGPT_RuntimePatch_OuterHash.txt' -Encoding UTF8
 
+      - name: Build and verify frozen R1.06 DeliveryBundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $runtimeName = 'Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_RuntimePatch.zip'
+          $applyName = 'RUN_PingGPT_261003_AccountTabsRefresh_R1.06.ps1'
+          $manifestName = 'PingGPT_R1.06_DeliveryManifest.txt'
+          $bundleName = 'Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_DeliveryBundle.zip'
+          $receiptName = 'PingGPT_R1.06_DeliveryReceipt.txt'
+          $project = 'PingGPT Account Tabs and Fresh Refresh R1.06 Runtime Patch'
+
+          $runtimePath = Join-Path $PWD $runtimeName
+          if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+            throw "Runtime patch missing: $runtimeName"
+          }
+
+          $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $runtimeManifest = Join-Path $PWD 'runtime-patch\FILE_SHA256_MANIFEST.txt'
+          $manifestLines = @(Get-Content -LiteralPath $runtimeManifest -Encoding UTF8)
+          $payloadCount = @($manifestLines | Where-Object { $_ -like 'FILE=*' }).Count
+          if ($payloadCount -lt 1) { throw 'Runtime manifest contains no payload files.' }
+
+          $templatePath = Join-Path $PWD 'scripts\pinggpt-runtime-patch-apply.template.ps1'
+          $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+          $applyText = $template.
+            Replace('@@PROJECT@@', $project).
+            Replace('@@EXPECTED_COMMIT@@', $env:GITHUB_SHA).
+            Replace('@@EXPECTED_ZIP_HASH@@', $runtimeHash).
+            Replace('@@EXPECTED_FILE_COUNT@@', [string]$payloadCount).
+            Replace('@@PATCH_FILENAME@@', $runtimeName).
+            Replace('@@BACKUP_TAG@@', 'PingGPT_PreR106_Backup').
+            Replace('@@TEMP_TAG@@', 'PingGPT_R106')
+
+          if ($applyText -match '@@[A-Z0-9_]+@@') {
+            throw "Unresolved apply-script template token: $($Matches[0])"
+          }
+
+          $deliveryRoot = Join-Path $PWD 'delivery-r106'
+          if (Test-Path -LiteralPath $deliveryRoot) { Remove-Item -LiteralPath $deliveryRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $deliveryRoot -Force | Out-Null
+
+          $applyPath = Join-Path $deliveryRoot $applyName
+          $bundleRuntimePath = Join-Path $deliveryRoot $runtimeName
+          $deliveryManifestPath = Join-Path $deliveryRoot $manifestName
+
+          $applyText | Set-Content -LiteralPath $applyPath -Encoding UTF8
+          Copy-Item -LiteralPath $runtimePath -Destination $bundleRuntimePath -Force
+
+          $applyHash = (Get-FileHash -LiteralPath $applyPath -Algorithm SHA256).Hash.ToUpperInvariant()
+          @(
+            'SCHEMA=pinggpt.delivery-bundle.v1'
+            'REVISION=R1.06'
+            "BRANCH=pinggpt-task-discovery-001"
+            "COMMIT=$env:GITHUB_SHA"
+            "RUNTIME_PATCH_FILE=$runtimeName"
+            "RUNTIME_PATCH_SHA256=$runtimeHash"
+            "APPLY_SCRIPT_FILE=$applyName"
+            "APPLY_SCRIPT_SHA256=$applyHash"
+            "PAYLOAD_FILE_COUNT=$payloadCount"
+            'MODE=CODE_ONLY_EXISTING_EXE'
+          ) | Set-Content -LiteralPath $deliveryManifestPath -Encoding UTF8
+
+          $deliveryManifestHash = (Get-FileHash -LiteralPath $deliveryManifestPath -Algorithm SHA256).Hash.ToUpperInvariant()
+
+          $bundlePath = Join-Path $PWD $bundleName
+          if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Force }
+          Compress-Archive -Path (Join-Path $deliveryRoot '*') -DestinationPath $bundlePath -CompressionLevel Optimal
+
+          $bundleHash = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $bundleSize = (Get-Item -LiteralPath $bundlePath).Length
+
+          $verifyRoot = Join-Path $PWD 'delivery-r106-verify'
+          if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $verifyRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $bundlePath -DestinationPath $verifyRoot -Force
+
+          $expectedNames = @($runtimeName, $applyName, $manifestName) | Sort-Object
+          $actualNames = @(Get-ChildItem -LiteralPath $verifyRoot -File | Select-Object -ExpandProperty Name | Sort-Object)
+          if (($expectedNames -join '|') -cne ($actualNames -join '|')) {
+            throw "DeliveryBundle member set mismatch. Expected=$($expectedNames -join ',') Actual=$($actualNames -join ',')"
+          }
+
+          if ((Get-FileHash -LiteralPath (Join-Path $verifyRoot $runtimeName) -Algorithm SHA256).Hash.ToUpperInvariant() -cne $runtimeHash) {
+            throw 'DeliveryBundle runtime patch hash mismatch after re-extract.'
+          }
+          if ((Get-FileHash -LiteralPath (Join-Path $verifyRoot $applyName) -Algorithm SHA256).Hash.ToUpperInvariant() -cne $applyHash) {
+            throw 'DeliveryBundle apply script hash mismatch after re-extract.'
+          }
+          if ((Get-FileHash -LiteralPath (Join-Path $verifyRoot $manifestName) -Algorithm SHA256).Hash.ToUpperInvariant() -cne $deliveryManifestHash) {
+            throw 'DeliveryBundle manifest hash mismatch after re-extract.'
+          }
+
+          @(
+            'PROJECT=PingGPT Account Tabs and Fresh Refresh R1.06'
+            'REVISION=R1.06'
+            "COMMIT=$env:GITHUB_SHA"
+            "BUNDLE_FILE=$bundleName"
+            "BUNDLE_SHA256=$bundleHash"
+            "BUNDLE_SIZE=$bundleSize"
+            "RUNTIME_PATCH_SHA256=$runtimeHash"
+            "APPLY_SCRIPT_SHA256=$applyHash"
+            "DELIVERY_MANIFEST_SHA256=$deliveryManifestHash"
+            "PAYLOAD_FILE_COUNT=$payloadCount"
+            'REEXTRACT_VERIFY=PASS'
+            'FROZEN_AFTER_VERIFY=YES'
+          ) | Set-Content -LiteralPath $receiptName -Encoding UTF8
+
+      - name: Upload frozen R1.06 DeliveryBundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-r106-delivery-bundle
+          path: |
+            Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_DeliveryBundle.zip
+            PingGPT_R1.06_DeliveryReceipt.txt
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload code-only runtime patch
         uses: actions/upload-artifact@v4
         with:
           name: pinggpt-task-discovery-runtime-patch
           path: |
-            Working_ZIP_PingGPT_261002_ProfileOwnership_R1.05_RuntimePatch.zip
+            Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1.06_RuntimePatch.zip
             PingGPT_RuntimePatch_OuterHash.txt
           if-no-files-found: error
           retention-days: 7
