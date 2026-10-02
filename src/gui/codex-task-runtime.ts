@@ -253,7 +253,7 @@ function snapshotHash(thread: Record<string, unknown>, turns: TurnRecord[]): str
     turns: turns.map((turn) => ({
       id: turn.id,
       status: turn.status,
-      items: turn.items.map((item) => ({ id: item.id, type: item.type })),
+      items: turn.items,
     })),
   };
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
