@@ -120,14 +120,14 @@ jobs:
 
           $templatePath = Join-Path $PWD 'scripts\pinggpt-runtime-patch-apply.template.ps1'
           $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
-          $applyText = $template.
-            Replace('@@PROJECT@@', $project).
-            Replace('@@EXPECTED_COMMIT@@', $env:GITHUB_SHA).
-            Replace('@@EXPECTED_ZIP_HASH@@', $runtimeHash).
-            Replace('@@EXPECTED_FILE_COUNT@@', [string]$payloadCount).
-            Replace('@@PATCH_FILENAME@@', $runtimeName).
-            Replace('@@BACKUP_TAG@@', 'PingGPT_PreR106_Backup').
-            Replace('@@TEMP_TAG@@', 'PingGPT_R106')
+          $applyText = $template
+          $applyText = $applyText.Replace('@@PROJECT@@', $project)
+          $applyText = $applyText.Replace('@@EXPECTED_COMMIT@@', $env:GITHUB_SHA)
+          $applyText = $applyText.Replace('@@EXPECTED_ZIP_HASH@@', $runtimeHash)
+          $applyText = $applyText.Replace('@@EXPECTED_FILE_COUNT@@', [string]$payloadCount)
+          $applyText = $applyText.Replace('@@PATCH_FILENAME@@', $runtimeName)
+          $applyText = $applyText.Replace('@@BACKUP_TAG@@', 'PingGPT_PreR106_Backup')
+          $applyText = $applyText.Replace('@@TEMP_TAG@@', 'PingGPT_R106')
 
           if ($applyText -match '@@[A-Z0-9_]+@@') {
             throw "Unresolved apply-script template token: $($Matches[0])"
