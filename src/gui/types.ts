@@ -56,7 +56,20 @@ export interface SchedulerTaskStatus {
 }
 
 export type TaskInventorySource = "account" | "legacy_global";
-export type TaskResumeEligibility = "same_profile_candidate" | "legacy_unassigned";
+export type TaskOwnershipStatus = "matched" | "mismatch" | "unverified" | "legacy";
+export type TaskResumeEligibility =
+  | "same_profile_candidate"
+  | "account_mismatch"
+  | "ownership_unverified"
+  | "legacy_unassigned";
+
+export interface TaskInventoryAccountState {
+  accountId: string;
+  accountLabel: string;
+  connectedEmail: string | null;
+  planType: string | null;
+  identityVerified: boolean;
+}
 
 export interface TaskInventoryItem {
   id: string;
@@ -75,6 +88,7 @@ export interface TaskInventoryItem {
   historyMode: string;
   sessionSource: string;
   originator: string | null;
+  ownershipStatus: TaskOwnershipStatus;
   resumeEligibility: TaskResumeEligibility;
 }
 
@@ -89,6 +103,7 @@ export interface TaskInventorySnapshot {
   generatedAt: string;
   items: TaskInventoryItem[];
   errors: TaskInventorySourceError[];
+  accounts: TaskInventoryAccountState[];
 }
 
 export type TaskResumeAction = "wait" | "continue" | "replay" | "abort";
