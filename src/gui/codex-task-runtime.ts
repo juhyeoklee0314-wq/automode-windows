@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
+import { closeSync, openSync, readSync, realpathSync } from "node:fs";
+import { resolve, sep } from "node:path";
 
 import { prepareStdioSpawn, resolveCodexNativeExecutable, which } from "../platform/command.js";
 import type { AccountProfile, AccountRateLimitStatus, TaskResumeResult } from "./types.js";
@@ -333,6 +335,79 @@ function result(
   return { accountId, threadId, action, status, detail, turnId };
 }
 
+function readFirstLine(path: string, maxBytes = 512 * 1024): string {
+  const fd = openSync(path, "r");
+  try {
+    const chunk = Buffer.allocUnsafe(8192);
+    const pieces: Buffer[] = [];
+    let total = 0;
+    while (total < maxBytes) {
+      const count = readSync(fd, chunk, 0, Math.min(chunk.length, maxBytes - total), null);
+      if (count <= 0) break;
+      const slice = Buffer.from(chunk.subarray(0, count));
+      const newline = slice.indexOf(0x0a);
+      if (newline >= 0) {
+        pieces.push(slice.subarray(0, newline));
+        return Buffer.concat(pieces).toString("utf8").replace(/\r$/, "");
+      }
+      pieces.push(slice);
+      total += count;
+    }
+    throw new Error("Thread session metadata line exceeded the verification limit.");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function currentAccountIdFromRateLimits(result: unknown): string | null {
+  const root = asRecord(result);
+  return typeof root?.accountId === "string" && root.accountId.trim() ? root.accountId : null;
+}
+
+async function currentAuthenticatedAccountId(session: Session): Promise<string> {
+  const response = rpcResult(await sendRpc(session, `identity-${Date.now()}`, "account/rateLimits/read", {
+    excludeResetCreditDetails: true,
+  }), "account/rateLimits/read");
+  const accountId = currentAccountIdFromRateLimits(response);
+  if (!accountId) throw new Error("Current ChatGPT account identity could not be verified.");
+  return accountId;
+}
+
+function threadCreatorAccountId(thread: Record<string, unknown>, codexHome: string): string {
+  const rawPath = typeof thread.path === "string" ? thread.path : null;
+  if (!rawPath) throw new Error("Task creator identity cannot be verified because the rollout path is unavailable.");
+
+  const home = realpathSync(codexHome);
+  const rollout = realpathSync(rawPath);
+  const homePrefix = resolve(home) + sep;
+  if (!resolve(rollout).startsWith(homePrefix)) {
+    throw new Error("Task rollout is outside the selected account store.");
+  }
+
+  const first = JSON.parse(readFirstLine(rollout)) as unknown;
+  const envelope = asRecord(first);
+  const payload = asRecord(envelope?.payload);
+  if (envelope?.type !== "session_meta") {
+    throw new Error("Task session metadata is unavailable.");
+  }
+  const creator = payload?.creator_account_id;
+  if (typeof creator !== "string" || !creator.trim()) {
+    throw new Error("Task creator account identity is unavailable.");
+  }
+  return creator;
+}
+
+function verifyTaskAccountOwnership(
+  thread: Record<string, unknown>,
+  codexHome: string,
+  currentAccountId: string,
+): void {
+  const creatorAccountId = threadCreatorAccountId(thread, codexHome);
+  if (creatorAccountId !== currentAccountId) {
+    throw new Error("Task creator account does not match the currently connected ChatGPT account.");
+  }
+}
+
 function numeric(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -397,6 +472,8 @@ export async function resumeCodexTask(
     await initialize(session);
 
     const before = await readThread(session, threadId);
+    const currentAccountId = await currentAuthenticatedAccountId(session);
+    verifyTaskAccountOwnership(before, account.codexHome, currentAccountId);
     const actualUpdatedAt = typeof before.updatedAt === "number" ? before.updatedAt : null;
     if (expectedUpdatedAt !== null && actualUpdatedAt !== expectedUpdatedAt) {
       return result(account.id, threadId, "abort", "history_changed", "The task changed after the Task list was loaded.");
