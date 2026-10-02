@@ -261,6 +261,23 @@ describe("task discovery safety boundary", () => {
     assert.ok(noDbReturnAt > identityAt);
   });
 
+  it("builds one frozen R1.06 DeliveryBundle from the exact runtime patch", () => {
+    const workflow = source(".github/workflows/pinggpt-task-resume-package.yml");
+    const applyTemplate = source("scripts/pinggpt-runtime-patch-apply.template.ps1");
+
+    assert.match(workflow, /Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1\.06_RuntimePatch\.zip/);
+    assert.match(workflow, /Working_ZIP_PingGPT_261003_AccountTabsRefresh_R1\.06_DeliveryBundle\.zip/);
+    assert.match(workflow, /PingGPT_R1\.06_DeliveryReceipt\.txt/);
+    assert.match(workflow, /REEXTRACT_VERIFY=PASS/);
+    assert.match(workflow, /FROZEN_AFTER_VERIFY=YES/);
+    assert.match(workflow, /pinggpt-r106-delivery-bundle/);
+
+    assert.match(applyTemplate, /\$PatchZip = Join-Path \$PSScriptRoot \$PatchFileName/);
+    assert.match(applyTemplate, /Runtime ZIP SHA256 mismatch/);
+    assert.match(applyTemplate, /Patch commit mismatch/);
+    assert.doesNotMatch(applyTemplate, /Downloads/);
+  });
+
   it("sorts and filters task inventory locally without reclassifying ownership", () => {
     const renderer = source("src/gui/renderer/app.js");
     assert.match(renderer, /\.filter\(taskMatchesFilter\)/);
