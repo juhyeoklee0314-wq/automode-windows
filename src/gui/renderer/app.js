@@ -48,6 +48,7 @@ function render(data) {
     $(`${agent}-badge`).classList.toggle("ok", Boolean(found));
   }
   renderAccounts(p.accounts);
+  renderTaskResumeSchedules(p.taskResumeSchedules || []);
   const tasks = $("task-list");
   tasks.replaceChildren();
   if (!data.scheduler.length) tasks.innerHTML = '<p class="muted">No GUI scheduler tasks installed.</p>';
@@ -439,6 +440,129 @@ function formatTaskTime(seconds) {
   return new Date(seconds * 1000).toLocaleString();
 }
 
+function defaultTaskScheduleValue() {
+  const date = new Date(Date.now() + 5 * 60 * 1000);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function renderTaskResumeSchedules(schedules) {
+  const root = $("task-resume-schedule-list");
+  if (!root) return;
+  root.replaceChildren();
+  if (!schedules.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No task resumes are scheduled.";
+    root.append(empty);
+    return;
+  }
+
+  schedules
+    .slice()
+    .sort((a, b) => new Date(a.runAt).getTime() - new Date(b.runAt).getTime())
+    .forEach((schedule) => {
+      const row = document.createElement("div");
+      row.className = "task-resume-schedule";
+
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = schedule.title || "Codex task";
+      const meta = document.createElement("small");
+      const account = snapshot?.preferences?.accounts?.find((entry) => entry.id === schedule.accountId);
+      meta.textContent = [
+        account?.displayName || schedule.accountId,
+        new Date(schedule.runAt).toLocaleString(),
+        schedule.enabled ? "Scheduled" : schedule.lastStatus || "Finished",
+      ].join(" · ");
+      copy.append(title, meta);
+
+      const cancel = document.createElement("button");
+      cancel.className = "remove small";
+      cancel.textContent = schedule.enabled ? "Cancel" : "Remove";
+      cancel.onclick = async () => {
+        cancel.disabled = true;
+        try {
+          render(await window.automode.cancelTaskResumeSchedule(schedule.id));
+          showBanner("Task resume schedule removed.");
+        } catch (error) {
+          showBanner(`Could not remove task resume schedule: ${error.message || error}`, true);
+          cancel.disabled = false;
+        }
+      };
+
+      row.append(copy, cancel);
+      root.append(row);
+    });
+}
+
+async function resumeTaskNow(item, button) {
+  if (!item.accountId) return;
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = "Running…";
+  try {
+    const result = await window.automode.resumeTask(item.accountId, item.id, item.updatedAt);
+    const ok = ["completed", "already_running"].includes(result.status);
+    showBanner(`${result.status}: ${result.detail}`, !ok);
+    await refreshTasks();
+  } catch (error) {
+    showBanner(`Could not resume task: ${error.message || error}`, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function scheduleTaskAt(item, dateValue) {
+  if (!item.accountId) return;
+  const when = new Date(dateValue);
+  if (!Number.isFinite(when.getTime())) {
+    showBanner("Choose a valid resume date and time.", true);
+    return;
+  }
+  try {
+    render(await window.automode.scheduleTaskResume(
+      item.accountId,
+      item.id,
+      item.title,
+      when.toISOString(),
+      item.updatedAt,
+    ));
+    showBanner(`Task resume scheduled for ${when.toLocaleString()}.`);
+  } catch (error) {
+    showBanner(`Could not schedule task resume: ${error.message || error}`, true);
+  }
+}
+
+async function scheduleTaskAtReset(item, button) {
+  if (!item.accountId) return;
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = "Checking…";
+  try {
+    const limits = await window.automode.getAccountRateLimitStatus(item.accountId);
+    if (!Number.isFinite(limits.suggestedResetAt)) {
+      throw new Error("Codex did not provide a future reset timestamp.");
+    }
+    const graceSeconds = Number(snapshot?.config?.grace_seconds ?? 60);
+    const when = new Date(limits.suggestedResetAt * 1000 + Math.max(0, graceSeconds) * 1000);
+    render(await window.automode.scheduleTaskResume(
+      item.accountId,
+      item.id,
+      item.title,
+      when.toISOString(),
+      item.updatedAt,
+    ));
+    showBanner(`Task resume scheduled for limit reset + grace: ${when.toLocaleString()}.`);
+  } catch (error) {
+    showBanner(`Could not schedule at reset: ${error.message || error}`, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 function renderTaskInventory(data) {
   const root = $("codex-task-list");
   const summary = $("task-inventory-summary");
@@ -468,10 +592,8 @@ function renderTaskInventory(data) {
 
     const copy = document.createElement("div");
     copy.className = "codex-task-copy";
-
     const title = document.createElement("strong");
     title.textContent = item.title;
-
     const meta = document.createElement("small");
     meta.textContent = [
       item.accountLabel,
@@ -479,32 +601,53 @@ function renderTaskInventory(data) {
       item.sessionSource,
       formatTaskTime(item.recencyAt ?? item.updatedAt ?? item.createdAt),
     ].filter(Boolean).join(" · ");
-
     const cwd = document.createElement("small");
     cwd.className = "codex-task-cwd";
     cwd.textContent = item.cwd || "Working directory unavailable";
-
     copy.append(title, meta, cwd);
 
     const actions = document.createElement("div");
     actions.className = "codex-task-actions";
-
     const badge = document.createElement("span");
     badge.className = `badge ${item.source === "account" ? "ok" : ""}`;
     badge.textContent = item.source === "account" ? "ACCOUNT TASK" : "LEGACY / GLOBAL";
+    actions.append(badge);
 
-    const resume = document.createElement("button");
-    resume.className = "secondary small";
-    resume.disabled = true;
-    if (item.resumeEligibility === "same_profile_candidate") {
-      resume.textContent = "Resume test pending";
-      resume.title = "Same-profile resume will be enabled after the next isolated resume verification.";
+    if (item.resumeEligibility === "same_profile_candidate" && item.accountId) {
+      const resume = document.createElement("button");
+      resume.className = "secondary small";
+      resume.textContent = "Resume now";
+      resume.onclick = () => resumeTaskNow(item, resume);
+
+      const scheduleWrap = document.createElement("div");
+      scheduleWrap.className = "task-resume-controls";
+      const when = document.createElement("input");
+      when.type = "datetime-local";
+      when.className = "task-resume-time";
+      when.value = defaultTaskScheduleValue();
+
+      const schedule = document.createElement("button");
+      schedule.className = "secondary small";
+      schedule.textContent = "Schedule";
+      schedule.onclick = () => scheduleTaskAt(item, when.value);
+
+      const reset = document.createElement("button");
+      reset.className = "secondary small";
+      reset.textContent = "At reset";
+      reset.title = "Use the selected account's current Codex rate-limit reset time plus the configured grace period.";
+      reset.onclick = () => scheduleTaskAtReset(item, reset);
+
+      scheduleWrap.append(when, schedule, reset);
+      actions.append(resume, scheduleWrap);
     } else {
-      resume.textContent = "Cross-account unavailable";
-      resume.title = "Current Codex local storage cannot safely resume this legacy paginated task through a different isolated account.";
+      const disabled = document.createElement("button");
+      disabled.className = "secondary small";
+      disabled.disabled = true;
+      disabled.textContent = "Cross-account unavailable";
+      disabled.title = "Legacy / Global tasks cannot be resumed through an isolated account store.";
+      actions.append(disabled);
     }
 
-    actions.append(badge, resume);
     row.append(copy, actions);
     root.append(row);
   });
@@ -529,6 +672,7 @@ async function refreshTasks() {
   try {
     const data = await window.automode.getTaskInventory();
     renderTaskInventory(data);
+    renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
   } catch (error) {
     $("codex-task-list").replaceChildren();
     summary.textContent = "Task inventory failed.";
