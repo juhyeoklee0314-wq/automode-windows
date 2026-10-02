@@ -9,6 +9,12 @@ const DIAGNOSTIC_CHANNEL = "automode:diagnostic";
 const api: AutomodeApi = Object.freeze({
   getSnapshot: () => ipcRenderer.invoke("automode:get-snapshot"),
   getTaskInventory: () => ipcRenderer.invoke("automode:get-task-inventory"),
+  resumeTask: (accountId: string, threadId: string, expectedUpdatedAt: number | null) =>
+    ipcRenderer.invoke("automode:resume-task", accountId, threadId, expectedUpdatedAt),
+  scheduleTaskResume: (accountId: string, threadId: string, title: string, runAt: string, expectedUpdatedAt: number | null) =>
+    ipcRenderer.invoke("automode:schedule-task-resume", accountId, threadId, title, runAt, expectedUpdatedAt),
+  cancelTaskResumeSchedule: (scheduleId: string) => ipcRenderer.invoke("automode:cancel-task-resume", scheduleId),
+  getAccountRateLimitStatus: (accountId: string) => ipcRenderer.invoke("automode:account-rate-limit-status", accountId),
   save: (payload: SavePayload) => ipcRenderer.invoke("automode:save", payload),
   setScheduler: (enabled: boolean) => ipcRenderer.invoke("automode:set-scheduler", enabled),
   setRunAtLogin: (enabled: boolean) => ipcRenderer.invoke("automode:set-login", enabled),
