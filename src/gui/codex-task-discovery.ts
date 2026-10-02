@@ -527,15 +527,22 @@ export function classifyTaskOwnership(
 }
 
 async function listSource(command: string, target: DiscoveryTarget): Promise<ListedSource> {
-  if (!existsSync(join(target.codexHome, "state_5.sqlite"))) {
+  const stateDbExists = existsSync(join(target.codexHome, "state_5.sqlite"));
+  if (target.source === "legacy_global" && !stateDbExists) {
     return { items: [], identity: emptyIdentity() };
   }
+
   const session = await startAppServer(command, target.codexHome);
   const deadline = Date.now() + SOURCE_TIMEOUT_MS;
   try {
     await initialize(session, target.accountId ?? "legacy");
     const remainingForIdentity = Math.max(1_000, Math.min(RPC_TIMEOUT_MS, deadline - Date.now()));
     const identity = await readSourceIdentity(session, target, remainingForIdentity);
+
+    // A profile can be connected before it has any indexed tasks. Identity refresh
+    // must still succeed so reconnect state never depends on state_5.sqlite existing.
+    if (!stateDbExists) return { items: [], identity };
+
     const byId = new Map<string, TaskInventoryItem>();
     let cursor: string | null = null;
     let page = 0;
