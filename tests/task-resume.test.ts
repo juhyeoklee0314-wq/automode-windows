@@ -120,6 +120,14 @@ describe("task resume wiring safety", () => {
     assert.match(service, /filter\(\(schedule\) => resumableAccounts\.has\(schedule\.accountId\)\)/);
   });
 
+  it("checks persisted running state before calling thread/resume", () => {
+    const runtime = source("src/gui/codex-task-runtime.ts");
+    const decisionAt = runtime.indexOf("const decision = decideResumeRecovery");
+    const resumeAt = runtime.indexOf("await resumeThread(session, threadId)");
+    assert.ok(decisionAt >= 0);
+    assert.ok(resumeAt > decisionAt);
+  });
+
   it("uses official resume, turns-list, revert, and turn-start APIs", () => {
     const runtime = source("src/gui/codex-task-runtime.ts");
     assert.match(runtime, /"thread\/resume"/);
