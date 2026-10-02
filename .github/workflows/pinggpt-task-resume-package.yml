@@ -86,7 +86,7 @@ jobs:
                 Add-Content -LiteralPath $manifest -Encoding UTF8
             }
 
-          $zip = Join-Path $PWD 'Working_ZIP_PingGPT_261002_TaskOpsUI_R1.04_RuntimePatch.zip'
+          $zip = Join-Path $PWD 'Working_ZIP_PingGPT_261002_ProfileOwnership_R1.05_RuntimePatch.zip'
           if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
           Compress-Archive -LiteralPath (Join-Path $root 'payload'), $manifest -DestinationPath $zip -CompressionLevel Optimal
 
@@ -100,7 +100,7 @@ jobs:
         with:
           name: pinggpt-task-discovery-runtime-patch
           path: |
-            Working_ZIP_PingGPT_261002_TaskOpsUI_R1.04_RuntimePatch.zip
+            Working_ZIP_PingGPT_261002_ProfileOwnership_R1.05_RuntimePatch.zip
             PingGPT_RuntimePatch_OuterHash.txt
           if-no-files-found: error
           retention-days: 7
