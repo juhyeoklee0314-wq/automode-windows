@@ -10,6 +10,7 @@
     $PatchFileName = '@@PATCH_FILENAME@@'
     $BaselineManifestFileName = '@@BASELINE_MANIFEST_FILENAME@@'
     $ExpectedBaselineCommit = '@@BASELINE_COMMIT@@'
+    $ExpectedBaselineManifestHash = '@@BASELINE_MANIFEST_SHA256@@'
 
     $InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\PingGPT'
     $Exe = Join-Path $InstallRoot 'PingGPT.exe'
@@ -55,7 +56,46 @@
         return @($Lines | Where-Object { $_ -like 'FILE=*' })
     }
 
+    function Get-InstalledManagedPaths {
+        $Paths = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($Root in @($Dist, $Renderer, $Assets)) {
+            if (-not (Test-Path -LiteralPath $Root -PathType Container)) { continue }
+            Get-ChildItem -LiteralPath $Root -File -Recurse | ForEach-Object {
+                $Prefix = $AppRoot.TrimEnd('\') + '\'
+                [void]$Paths.Add($_.FullName.Substring($Prefix.Length).Replace('\','/'))
+            }
+        }
+        if (Test-Path -LiteralPath $PackageJson -PathType Leaf) {
+            [void]$Paths.Add('package.json')
+        }
+        return @($Paths | Sort-Object -Unique)
+    }
+
     function Test-InstalledManifest([string[]]$Entries) {
+        $ExpectedPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($Line in $Entries) {
+            $Parts = $Line -split '\|'
+            if ($Parts.Count -ne 3) {
+                return @{ Match = $false; Verified = 0; Detail = "Malformed manifest row: $Line" }
+            }
+            $Relative = $Parts[0].Substring(5).Replace('\','/')
+            [void]$ExpectedPaths.Add($Relative)
+        }
+
+        $ActualPaths = @(Get-InstalledManagedPaths)
+        if ($ActualPaths.Count -ne $ExpectedPaths.Count) {
+            return @{
+                Match = $false
+                Verified = 0
+                Detail = "Managed file-set count mismatch. Expected=$($ExpectedPaths.Count) Actual=$($ActualPaths.Count)"
+            }
+        }
+        foreach ($Relative in $ActualPaths) {
+            if (-not $ExpectedPaths.Contains($Relative)) {
+                return @{ Match = $false; Verified = 0; Detail = "Unexpected installed managed file: $Relative" }
+            }
+        }
+
         $Verified = 0
         foreach ($Line in $Entries) {
             $Parts = $Line -split '\|'
@@ -205,6 +245,10 @@
             }
         }
 
+        $ObservedBaselineManifestHash = Get-Sha256 $BaselineManifestPath
+        if ($ObservedBaselineManifestHash -cne $ExpectedBaselineManifestHash) {
+            throw "Baseline manifest SHA256 mismatch. Expected=$ExpectedBaselineManifestHash Actual=$ObservedBaselineManifestHash"
+        }
         $BaselineLines = @(Get-Content -LiteralPath $BaselineManifestPath -Encoding UTF8)
         $BaselineCommitLines = @($BaselineLines | Where-Object { $_ -like 'COMMIT=*' })
         if ($BaselineCommitLines.Count -ne 1 -or $BaselineCommitLines[0].Substring(7).Trim() -cne $ExpectedBaselineCommit) {
