@@ -434,12 +434,117 @@ async function connectAccount(card) {
   }
 }
 
+function formatTaskTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "Unknown time";
+  return new Date(seconds * 1000).toLocaleString();
+}
+
+function renderTaskInventory(data) {
+  const root = $("codex-task-list");
+  const summary = $("task-inventory-summary");
+  root.replaceChildren();
+
+  const accountCount = data.items.filter((item) => item.source === "account").length;
+  const legacyCount = data.items.filter((item) => item.source === "legacy_global").length;
+  const errorCount = data.errors.length;
+  summary.textContent = [
+    `${accountCount} account task${accountCount === 1 ? "" : "s"}`,
+    `${legacyCount} legacy task${legacyCount === 1 ? "" : "s"}`,
+    errorCount ? `${errorCount} source error${errorCount === 1 ? "" : "s"}` : null,
+  ].filter(Boolean).join(" · ");
+
+  if (!data.items.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = errorCount
+      ? "No tasks could be loaded from the available Codex stores."
+      : "No Codex tasks were found.";
+    root.append(empty);
+  }
+
+  data.items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = `codex-task-row ${item.source === "legacy_global" ? "legacy" : "owned"}`;
+
+    const copy = document.createElement("div");
+    copy.className = "codex-task-copy";
+
+    const title = document.createElement("strong");
+    title.textContent = item.title;
+
+    const meta = document.createElement("small");
+    meta.textContent = [
+      item.accountLabel,
+      item.model,
+      item.sessionSource,
+      formatTaskTime(item.recencyAt ?? item.updatedAt ?? item.createdAt),
+    ].filter(Boolean).join(" · ");
+
+    const cwd = document.createElement("small");
+    cwd.className = "codex-task-cwd";
+    cwd.textContent = item.cwd || "Working directory unavailable";
+
+    copy.append(title, meta, cwd);
+
+    const actions = document.createElement("div");
+    actions.className = "codex-task-actions";
+
+    const badge = document.createElement("span");
+    badge.className = `badge ${item.source === "account" ? "ok" : ""}`;
+    badge.textContent = item.source === "account" ? "ACCOUNT TASK" : "LEGACY / GLOBAL";
+
+    const resume = document.createElement("button");
+    resume.className = "secondary small";
+    resume.disabled = true;
+    if (item.resumeEligibility === "same_profile_candidate") {
+      resume.textContent = "Resume test pending";
+      resume.title = "Same-profile resume will be enabled after the next isolated resume verification.";
+    } else {
+      resume.textContent = "Cross-account unavailable";
+      resume.title = "Current Codex local storage cannot safely resume this legacy paginated task through a different isolated account.";
+    }
+
+    actions.append(badge, resume);
+    row.append(copy, actions);
+    root.append(row);
+  });
+
+  data.errors.forEach((entry) => {
+    const error = document.createElement("div");
+    error.className = "task-source-error";
+    const title = document.createElement("strong");
+    title.textContent = entry.accountLabel;
+    const detail = document.createElement("small");
+    detail.textContent = entry.detail;
+    error.append(title, detail);
+    root.append(error);
+  });
+}
+
+async function refreshTasks() {
+  const button = $("refresh-tasks");
+  const summary = $("task-inventory-summary");
+  button.disabled = true;
+  summary.textContent = "Reading Codex task stores…";
+  try {
+    const data = await window.automode.getTaskInventory();
+    renderTaskInventory(data);
+  } catch (error) {
+    $("codex-task-list").replaceChildren();
+    summary.textContent = "Task inventory failed.";
+    showBanner(`Could not load tasks: ${error.message || error}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 document.querySelectorAll(".nav").forEach((button) => button.onclick = () => {
   document.querySelectorAll(".nav,.page").forEach((el) => el.classList.remove("active"));
   button.classList.add("active");
   $(`page-${button.dataset.page}`).classList.add("active");
   $("page-title").textContent = button.textContent;
   if (button.dataset.page === "logs") refreshLog();
+  if (button.dataset.page === "tasks") refreshTasks();
 });
 
 $("add-account").onclick = async () => {
@@ -516,6 +621,8 @@ $("export-diagnostic").onclick = async () => {
     button.textContent = "진단 로그 저장";
   }
 };
+$("refresh-tasks").onclick = refreshTasks;
+
 async function refreshLog() { $("log-content").textContent = await window.automode.readLog(); }
 $("refresh-log").onclick = refreshLog;
 $("open-log").onclick = () => window.automode.openLogFolder();
