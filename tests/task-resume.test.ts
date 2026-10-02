@@ -128,6 +128,16 @@ describe("task resume wiring safety", () => {
     assert.ok(resumeAt > decisionAt);
   });
 
+  it("uses the existing safe wake-return pattern for scheduled task resumes", () => {
+    const runner = source("src/gui/scheduled-task-resume.ts");
+    const main = source("src/gui/main.ts");
+    assert.match(runner, /recentlyResumedFromSuspend/);
+    assert.match(runner, /activeExecutionLockCount/);
+    assert.match(runner, /idleGrowth \+ IDLE_TOLERANCE_SECONDS < elapsedSeconds/);
+    assert.match(main, /requestSleep: \(\) => requestWindowsSleep\(\)/);
+    assert.match(main, /getSystemIdleTime: \(\) => powerMonitor\.getSystemIdleTime\(\)/);
+  });
+
   it("uses official resume, turns-list, revert, and turn-start APIs", () => {
     const runtime = source("src/gui/codex-task-runtime.ts");
     assert.match(runtime, /"thread\/resume"/);
