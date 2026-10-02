@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize, resolve } from "node:path";
 
@@ -16,6 +16,8 @@ const RPC_TIMEOUT_MS = 12_000;
 const SOURCE_TIMEOUT_MS = 20_000;
 const MAX_CAPTURE = 512 * 1024;
 const PAGE_LIMIT = 100;
+const MAX_ROLLOUT_FILES = 1_000;
+const MAX_ROLLOUT_PREFIX_BYTES = 2 * 1024 * 1024;
 
 interface AppServerSession {
   child: ReturnType<typeof spawn>;
@@ -91,6 +93,154 @@ function sourceLabel(value: unknown): string {
   } catch {
     return "unknown";
   }
+}
+
+function readPrefix(path: string, maxBytes = MAX_ROLLOUT_PREFIX_BYTES): string {
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(maxBytes);
+    const count = readSync(fd, buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, count).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function activeRolloutPaths(codexHome: string): string[] {
+  const root = join(codexHome, "sessions");
+  if (!existsSync(root)) return [];
+
+  const paths: string[] = [];
+  const pending = [root];
+  while (pending.length) {
+    const directory = pending.pop();
+    if (!directory) break;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(path);
+        continue;
+      }
+      if (!entry.isFile() || !/^rollout-.*\.jsonl$/i.test(entry.name)) continue;
+      paths.push(path);
+      if (paths.length > MAX_ROLLOUT_FILES) {
+        throw new Error(`Account rollout scan exceeded the ${MAX_ROLLOUT_FILES}-file safety limit.`);
+      }
+    }
+  }
+  return paths;
+}
+
+function timestampSeconds(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis / 1000 : null;
+}
+
+function rolloutUserText(payload: Record<string, unknown>): string | null {
+  if (payload.type === "user_message") return safeString(payload.message, 240);
+  if (payload.type !== "message" || payload.role !== "user" || !Array.isArray(payload.content)) return null;
+  for (const part of payload.content) {
+    const item = asRecord(part);
+    if (!item) continue;
+    if (item.type === "input_text" || item.type === "text") {
+      const text = safeString(item.text, 240);
+      if (text) return text;
+    }
+  }
+  return null;
+}
+
+function stripUserPrefix(value: string | null): string | null {
+  if (!value) return null;
+  const marker = "## My request for Codex:";
+  const at = value.indexOf(marker);
+  return safeString(at >= 0 ? value.slice(at + marker.length) : value, 240);
+}
+
+function isUserResumableRolloutSource(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return ["cli", "vscode", "exec", "mcp"].includes(value.toLowerCase());
+}
+
+export function parseRolloutInventoryText(
+  text: string,
+  modifiedAtSeconds: number,
+  target: Pick<DiscoveryTarget, "source" | "accountId" | "accountLabel">,
+): TaskInventoryItem | null {
+  const lines = text.split(/\r?\n/);
+  let meta: Record<string, unknown> | null = null;
+  let preview: string | null = null;
+  let model: string | null = null;
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let record: Record<string, unknown> | null = null;
+    try { record = asRecord(JSON.parse(line)); } catch { continue; }
+    if (!record) continue;
+    const payload = asRecord(record.payload);
+    if (!payload) continue;
+
+    if (!meta && record.type === "session_meta") {
+      meta = payload;
+      continue;
+    }
+    if (!preview && (record.type === "event_msg" || record.type === "response_item")) {
+      preview = stripUserPrefix(rolloutUserText(payload));
+    }
+    if (!model && record.type === "turn_context") {
+      model = safeString(payload.model, 120);
+    }
+  }
+
+  if (!meta) return null;
+  const id = safeString(meta.id, 100);
+  const creatorAccountId = safeString(meta.creator_account_id, 300);
+  if (!id || !creatorAccountId || !/^[0-9A-Fa-f-]{36}$/.test(id)) return null;
+  if (!isUserResumableRolloutSource(meta.source)) return null;
+
+  const createdAt = timestampSeconds(meta.timestamp);
+  const updatedAt = Number.isFinite(modifiedAtSeconds) && modifiedAtSeconds > 0
+    ? modifiedAtSeconds
+    : createdAt;
+  const title = preview ?? `Codex task ${id.slice(0, 8)}`;
+
+  return {
+    id,
+    source: target.source,
+    accountId: target.accountId,
+    accountLabel: target.accountLabel,
+    title,
+    preview: preview ?? "",
+    cwd: safeString(meta.cwd, 500),
+    model,
+    modelProvider: safeString(meta.model_provider, 120),
+    createdAt,
+    updatedAt,
+    recencyAt: updatedAt,
+    status: "notLoaded",
+    historyMode: safeString(meta.history_mode, 80) ?? "legacy",
+    sessionSource: sourceLabel(meta.source),
+    originator: safeString(meta.originator, 120),
+    resumeEligibility: target.source === "account"
+      ? "same_profile_candidate"
+      : "legacy_unassigned",
+  };
+}
+
+function listRolloutSource(target: DiscoveryTarget): TaskInventoryItem[] {
+  if (target.source !== "account") return [];
+  const items = new Map<string, TaskInventoryItem>();
+  for (const path of activeRolloutPaths(target.codexHome)) {
+    try {
+      const modifiedAtSeconds = statSync(path).mtimeMs / 1000;
+      const item = parseRolloutInventoryText(readPrefix(path), modifiedAtSeconds, target);
+      if (item) items.set(item.id, item);
+    } catch {
+      // One malformed/inaccessible rollout must not hide other account tasks.
+    }
+  }
+  return [...items.values()];
 }
 
 export function parseTaskInventoryThread(
@@ -291,6 +441,9 @@ async function listSource(command: string, target: DiscoveryTarget): Promise<Tas
           cursor,
           limit: PAGE_LIMIT,
           archived: false,
+          sourceKinds: target.source === "account"
+            ? ["cli", "vscode", "exec", "appServer"]
+            : ["cli", "vscode"],
           useStateDbOnly: true,
         },
         Math.min(RPC_TIMEOUT_MS, remaining),
@@ -366,7 +519,22 @@ export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<Ta
 
   for (const target of discoveryTargets(accounts)) {
     try {
-      items.push(...await listSource(command, target));
+      if (target.source === "account") {
+        const rolloutItems = listRolloutSource(target);
+        let indexedItems: TaskInventoryItem[] = [];
+        try {
+          indexedItems = await listSource(command, target);
+        } catch (error) {
+          if (!rolloutItems.length) throw error;
+        }
+        const merged = new Map<string, TaskInventoryItem>();
+        for (const item of rolloutItems) merged.set(item.id, item);
+        // Indexed metadata is canonical when present; rollout scanning is a read-only fallback.
+        for (const item of indexedItems) merged.set(item.id, item);
+        items.push(...merged.values());
+      } else {
+        items.push(...await listSource(command, target));
+      }
     } catch (error) {
       errors.push({
         source: target.source,
