@@ -3,12 +3,13 @@ import { createLogger } from "../core/log.js";
 import { State } from "../core/state.js";
 import { parseHhmm, resolveTz, wallClockAt } from "../core/timeutil.js";
 import { acquireExecutionLock, activeExecutionLockCount, leaseIsLive } from "./lease.js";
-import { loadPreferences } from "./preferences.js";
+import { findAccountTarget, loadPreferences, runnableAccountTargets } from "./preferences.js";
+import { codexAuthStatus } from "./account-auth.js";
 import { recentlyResumedFromSuspend } from "./power-state.js";
 import { reliablePing } from "./reliable-ping.js";
 import { which } from "../platform/command.js";
 import type { DiagnosticTrace } from "./diagnostics.js";
-import type { AccountProfile, GuiPreferences } from "./types.js";
+import type { AccountTarget, GuiPreferences } from "./types.js";
 
 const WAKE_LEASE_WAIT_MS = 15_000;
 const WAKE_CORRELATION_MINUTES = 15;
@@ -35,17 +36,17 @@ function elapsedMinutes(hour: number, minute: number, scheduledHour: number, sch
   return elapsed;
 }
 
-export function accountPingEnvironment(account: AccountProfile): NodeJS.ProcessEnv | undefined {
+export function accountPingEnvironment(account: AccountTarget): NodeJS.ProcessEnv | undefined {
   if (account.agent !== "codex" || !account.codexHome) return undefined;
   return { CODEX_HOME: account.codexHome };
 }
 
-export function accountPingUnsetEnvironment(account: AccountProfile): string[] {
+export function accountPingUnsetEnvironment(account: AccountTarget): string[] {
   if (account.agent !== "codex" || !account.codexHome) return [];
   return ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"];
 }
 
-export function accountCatchupMinutes(account: AccountProfile, config: configmod.Config): number {
+export function accountCatchupMinutes(account: AccountTarget, config: configmod.Config): number {
   const candidate = Number(account.catchupMinutes);
   if (Number.isFinite(candidate)) return Math.max(0, Math.min(180, Math.round(candidate)));
   return Math.max(0, Math.min(180, Math.round(config.ping.catchup_minutes)));
@@ -64,7 +65,7 @@ function wakeBatchDue(
   now: Date,
   timezone: string,
 ): boolean {
-  for (const candidate of preferences.accounts) {
+  for (const candidate of runnableAccountTargets(preferences)) {
     if (!candidate.enabled || candidate.wakePc !== true) continue;
     const limit = Math.min(accountCatchupMinutes(candidate, config), WAKE_CORRELATION_MINUTES);
     for (const time of candidate.schedules) {
@@ -135,21 +136,24 @@ async function maybeReturnToSleep(
 }
 
 export async function runScheduled(
-  accountId: string,
+  profileId: string,
+  storeId: string,
   scheduleId: string,
   now = new Date(),
   trace?: DiagnosticTrace,
   runtime: ScheduledRuntime = {},
 ): Promise<number> {
   const log = createLogger();
-  trace?.emit("PING_01_RUNNER_ENTER", "scheduled", { accountId, scheduleId });
+  trace?.emit("PING_01_RUNNER_ENTER", "scheduled", { profileId, storeId, scheduleId });
 
   const config = configmod.load();
   const preferences = loadPreferences(config);
   if (!preferences.schedulerEnabled) return 75;
 
-  const account = preferences.accounts.find((entry) => entry.id === accountId && entry.enabled);
-  if (!account) return 64;
+  const profile = preferences.accounts.find((entry) => entry.id === profileId && entry.enabled);
+  const account = findAccountTarget(preferences, profileId, storeId);
+  if (!profile || !account || profile.activeStoreId !== storeId) return 64;
+  if (account.agent === "codex" && account.bindingState !== "ready") return 75;
 
   const index = Number(scheduleId.split("-").at(-1));
   const time = account.schedules[index];
@@ -196,7 +200,7 @@ export async function runScheduled(
   });
 
   const scheduledReference = new Date(now.getTime() - elapsed * 60_000);
-  const identity = `${account.id}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
+  const identity = `${account.profileId}-${account.storeId}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
   const state = new State();
 
   if (state.pingFired(identity)) {
@@ -218,6 +222,24 @@ export async function runScheduled(
     if (state.pingFired(identity)) {
       code = 0;
     } else {
+      if (account.agent === "codex") {
+        const auth = await codexAuthStatus(account);
+        if (
+          auth.state !== "connected"
+          || auth.identityVerified !== true
+          || !auth.identityKey
+          || !account.identityKey
+          || auth.identityKey !== account.identityKey
+        ) {
+          trace?.emit("PING_07_ACCOUNT_IDENTITY_REJECTED", "scheduled", {
+            profileId: account.profileId,
+            storeId: account.storeId,
+            authState: auth.state,
+          });
+          code = 75;
+          return code;
+        }
+      }
       const env = accountPingEnvironment(account);
       const unsetEnv = accountPingUnsetEnvironment(account);
       trace?.emit("PING_07_PROFILE_SELECTED", "scheduled", {
@@ -249,18 +271,24 @@ export async function runScheduled(
 
 /** Exercise the critical routing and eligibility path without sending or committing production state. */
 export async function runScheduledDryRun(
-  accountId: string,
+  profileId: string,
+  storeId: string,
   scheduleId: string,
   now = new Date(),
   trace?: DiagnosticTrace,
 ): Promise<number> {
-  trace?.emit("PING_DRY_01_RUNNER_ENTER", "dry_run", { accountId, scheduleId });
+  trace?.emit("PING_DRY_01_RUNNER_ENTER", "dry_run", { profileId, storeId, scheduleId });
   const config = configmod.load();
   const preferences = loadPreferences(config);
-  const account = preferences.accounts.find((entry) => entry.id === accountId && entry.enabled);
-  if (!account) {
-    trace?.emit("PING_DRY_02_ACCOUNT_REJECTED", "dry_run", { accountId });
+  const profile = preferences.accounts.find((entry) => entry.id === profileId && entry.enabled);
+  const account = findAccountTarget(preferences, profileId, storeId);
+  if (!profile || !account || profile.activeStoreId !== storeId) {
+    trace?.emit("PING_DRY_02_ACCOUNT_REJECTED", "dry_run", { profileId, storeId });
     return 64;
+  }
+  if (account.agent === "codex" && account.bindingState !== "ready") {
+    trace?.emit("PING_DRY_02_STORE_REJECTED", "dry_run", { profileId, storeId, bindingState: account.bindingState });
+    return 75;
   }
   const index = Number(scheduleId.split("-").at(-1));
   const time = account.schedules[index];
@@ -275,7 +303,7 @@ export async function runScheduledDryRun(
   const elapsed = elapsedMinutes(wall.hour, wall.minute, parsed[0], parsed[1]);
   const catchupMinutes = accountCatchupMinutes(account, config);
   const scheduledReference = new Date(now.getTime() - elapsed * 60_000);
-  const identity = `${account.id}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
+  const identity = `${account.profileId}-${account.storeId}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
   const state = new State();
   trace?.emit("PING_DRY_04_GATES_OBSERVED", "dry_run", {
     leaseLive: leaseIsLive(),
