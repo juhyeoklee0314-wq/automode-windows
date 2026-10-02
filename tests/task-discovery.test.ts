@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { parseRolloutInventoryText, parseTaskInventoryPage, parseTaskInventoryThread } from "../src/gui/codex-task-discovery.js";
+import { classifyTaskOwnership, parseRolloutInventoryText, parseTaskInventoryPage, parseTaskInventoryThread } from "../src/gui/codex-task-discovery.js";
 
 describe("Codex task inventory parsing", () => {
   const accountTarget = {
@@ -39,7 +39,8 @@ describe("Codex task inventory parsing", () => {
     assert.equal(item.accountId, "profile-a");
     assert.equal(item.accountLabel, "Main");
     assert.equal(item.title, "Named task");
-    assert.equal(item.resumeEligibility, "same_profile_candidate");
+    assert.equal(item.ownershipStatus, "unverified");
+    assert.equal(item.resumeEligibility, "ownership_unverified");
     assert.equal("path" in item, false);
   });
 
@@ -60,6 +61,7 @@ describe("Codex task inventory parsing", () => {
     assert.equal(page.items.length, 1);
     assert.equal(page.items[0]?.source, "legacy_global");
     assert.equal(page.items[0]?.accountId, null);
+    assert.equal(page.items[0]?.ownershipStatus, "legacy");
     assert.equal(page.items[0]?.resumeEligibility, "legacy_unassigned");
     assert.equal(page.nextCursor, "next-page");
   });
@@ -109,11 +111,12 @@ describe("Codex task inventory parsing", () => {
     assert.equal(item.updatedAt, 1_759_407_192);
     assert.equal(item.recencyAt, 1_759_407_192);
     assert.match(item.title, /PINGGPT_RESUME_TEST/);
-    assert.equal(item.resumeEligibility, "same_profile_candidate");
+    assert.equal(item.ownershipStatus, "unverified");
+    assert.equal(item.resumeEligibility, "ownership_unverified");
     assert.equal("path" in item, false);
   });
 
-  it("rejects rollout fallback rows without persisted creator identity", () => {
+  it("keeps rollout rows without creator identity visible but non-resumable", () => {
     const text = JSON.stringify({
       type: "session_meta",
       payload: {
@@ -123,7 +126,47 @@ describe("Codex task inventory parsing", () => {
         source: "exec",
       },
     });
-    assert.equal(parseRolloutInventoryText(text, 123, accountTarget), null);
+    const item = parseRolloutInventoryText(text, 123, accountTarget);
+    assert.ok(item);
+    assert.equal(item.ownershipStatus, "unverified");
+    assert.equal(item.resumeEligibility, "ownership_unverified");
+  });
+
+  it("classifies creator ownership without returning provider account ids", () => {
+    const item = parseTaskInventoryThread({
+      id: "01a00000-0000-7000-8000-000000000003",
+      preview: "ownership test",
+      source: "exec",
+    }, accountTarget);
+    assert.ok(item);
+
+    const matched = classifyTaskOwnership(item, "provider-a", {
+      providerAccountId: "provider-a",
+      connectedEmail: "main@example.com",
+      planType: "plus",
+      identityVerified: true,
+    });
+    assert.equal(matched.ownershipStatus, "matched");
+    assert.equal(matched.resumeEligibility, "same_profile_candidate");
+    assert.equal("providerAccountId" in matched, false);
+
+    const mismatch = classifyTaskOwnership(item, "provider-a", {
+      providerAccountId: "provider-b",
+      connectedEmail: "other@example.com",
+      planType: "plus",
+      identityVerified: true,
+    });
+    assert.equal(mismatch.ownershipStatus, "mismatch");
+    assert.equal(mismatch.resumeEligibility, "account_mismatch");
+
+    const unverified = classifyTaskOwnership(item, null, {
+      providerAccountId: "provider-a",
+      connectedEmail: "main@example.com",
+      planType: "plus",
+      identityVerified: true,
+    });
+    assert.equal(unverified.ownershipStatus, "unverified");
+    assert.equal(unverified.resumeEligibility, "ownership_unverified");
   });
 });
 
@@ -138,6 +181,10 @@ describe("task discovery safety boundary", () => {
     assert.match(discovery, /"exec", "appServer"/);
     assert.match(discovery, /join\(codexHome, "sessions"\)/);
     assert.match(discovery, /parseRolloutInventoryText/);
+    assert.match(discovery, /["']account\/read["']/);
+    assert.match(discovery, /["']account\/rateLimits\/read["']/);
+    assert.match(discovery, /creator_account_id/);
+    assert.match(discovery, /classifyTaskOwnership/);
     assert.doesNotMatch(discovery, /useStateDbOnly:\s*false/);
     assert.doesNotMatch(discovery, /["']thread\/(?:start|resume|fork|delete|archive|unarchive|rollback)["']/);
     assert.doesNotMatch(discovery, /["']turn\/(?:start|steer|interrupt)["']/);
@@ -190,5 +237,10 @@ describe("task discovery safety boundary", () => {
     assert.match(renderer, /SCHEDULED/);
     assert.match(renderer, /RUNNING/);
     assert.match(renderer, /READY/);
+    assert.match(renderer, /PROFILE TASK/);
+    assert.match(renderer, /ACCOUNT MISMATCH/);
+    assert.match(renderer, /OWNERSHIP UNVERIFIED/);
+    assert.match(renderer, /Reconnect matching account/);
+    assert.match(renderer, /Connected:/);
   });
 });
