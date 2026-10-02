@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 
 import { prepareStdioSpawn, resolveCodexNativeExecutable, which } from "../platform/command.js";
-import type { AccountProfile, TaskResumeResult } from "./types.js";
+import type { AccountProfile, AccountRateLimitStatus, TaskResumeResult } from "./types.js";
 
 const RPC_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -332,6 +332,51 @@ function result(
   turnId: string | null = null,
 ): TaskResumeResult {
   return { accountId, threadId, action, status, detail, turnId };
+}
+
+function numeric(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export async function readAccountRateLimitStatus(account: AccountProfile): Promise<AccountRateLimitStatus> {
+  let session: Session | undefined;
+  try {
+    session = await startSession(account);
+    await initialize(session);
+    const result = rpcResult(await sendRpc(session, "rate-limits", "account/rateLimits/read", {
+      excludeResetCreditDetails: true,
+    }), "account/rateLimits/read");
+    const root = asRecord(result);
+    const limits = asRecord(root?.rateLimits);
+    const primary = asRecord(limits?.primary);
+    const secondary = asRecord(limits?.secondary);
+    const primaryUsedPercent = numeric(primary?.usedPercent);
+    const primaryResetsAt = numeric(primary?.resetsAt);
+    const secondaryUsedPercent = numeric(secondary?.usedPercent);
+    const secondaryResetsAt = numeric(secondary?.resetsAt);
+    const blockedResets = [
+      primaryUsedPercent !== null && primaryUsedPercent >= 100 ? primaryResetsAt : null,
+      secondaryUsedPercent !== null && secondaryUsedPercent >= 100 ? secondaryResetsAt : null,
+    ].filter((value): value is number => value !== null && value * 1000 > Date.now());
+    const futureResets = [primaryResetsAt, secondaryResetsAt]
+      .filter((value): value is number => value !== null && value * 1000 > Date.now());
+    const suggestedResetAt = blockedResets.length
+      ? Math.max(...blockedResets)
+      : futureResets.length
+        ? Math.min(...futureResets)
+        : null;
+    return {
+      accountId: account.id,
+      ordinaryUsageAllowed: typeof root?.ordinaryUsageAllowed === "boolean" ? root.ordinaryUsageAllowed : null,
+      primaryUsedPercent,
+      primaryResetsAt,
+      secondaryUsedPercent,
+      secondaryResetsAt,
+      suggestedResetAt,
+    };
+  } finally {
+    stopSession(session);
+  }
 }
 
 export async function resumeCodexTask(
