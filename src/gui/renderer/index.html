@@ -21,7 +21,11 @@
       <div class="aside-foot"><span id="version">v0.1.0</span><span class="dot" id="lease-dot"></span><span id="lease-label">Loading</span></div>
     </aside>
     <main>
-      <header><div><p class="eyebrow">PINGGPT FOR WINDOWS</p><h1 id="page-title">Overview</h1></div><div class="header-actions"><button class="secondary" id="save">Save changes</button><button class="danger ghost" id="exit">Exit PingGPT</button></div></header>
+      <header>
+        <div class="header-title"><p class="eyebrow">PINGGPT FOR WINDOWS</p><h1 id="page-title">Overview</h1></div>
+        <div id="task-account-tabs" class="task-account-tabs hidden" role="tablist" aria-label="Task account filter"></div>
+        <div class="header-actions"><button class="secondary" id="save">Save changes</button><button class="danger ghost" id="exit">Exit PingGPT</button></div>
+      </header>
       <div id="banner" class="banner hidden"></div>
 
       <section class="page active" id="page-overview">
@@ -41,12 +45,15 @@
 
       <section class="page" id="page-tasks">
         <article class="card">
-          <div class="card-title">
+          <div class="card-title task-card-title">
             <div>
               <h3>Codex tasks</h3>
               <p>Tasks are read from each isolated ChatGPT account profile plus the legacy global Codex store. Discovery is read-only.</p>
             </div>
-            <button class="secondary small" id="refresh-tasks">Refresh tasks</button>
+            <div class="task-toolbar">
+              <input id="task-search" class="task-search" type="search" maxlength="160" placeholder="Search tasks" aria-label="Search tasks">
+              <button class="secondary small" id="refresh-tasks">Refresh tasks</button>
+            </div>
           </div>
           <div class="task-inventory-summary" id="task-inventory-summary">Open this page to load tasks.</div>
           <div id="codex-task-list" class="codex-task-list"></div>
