@@ -2,7 +2,7 @@ import * as configmod from "../core/config.js";
 import { createLogger } from "../core/log.js";
 import { acquireExecutionLock, activeExecutionLockCount } from "./lease.js";
 import { recentlyResumedFromSuspend } from "./power-state.js";
-import { loadPreferences, savePreferences } from "./preferences.js";
+import { findAccountTarget, loadPreferences, savePreferences } from "./preferences.js";
 import { resumeCodexTask } from "./codex-task-runtime.js";
 import type { TaskResumeResult } from "./types.js";
 
@@ -85,9 +85,9 @@ export async function runScheduledTaskResume(
     return { code: 75, result: null };
   }
 
-  const account = preferences.accounts.find((entry) =>
-    entry.id === schedule.accountId && entry.enabled && entry.agent === "codex");
-  if (!account) {
+  const profile = preferences.accounts.find((entry) => entry.id === schedule.profileId && entry.enabled);
+  const account = findAccountTarget(preferences, schedule.profileId, schedule.storeId);
+  if (!profile || !account) {
     schedule.enabled = false;
     schedule.completedAt = now.toISOString();
     schedule.lastStatus = "rejected";
@@ -95,6 +95,16 @@ export async function runScheduledTaskResume(
     onConsumed?.(schedule.id);
     await maybeReturnToSleep(wokeForResume, idleBaseline, idleBaselineAt, runtime);
     return { code: 64, result: null };
+  }
+
+  // Inactive account stores keep their one-shot reservation, but a stale Windows
+  // trigger can never execute them. Reactivation may reinstall it if still future-dated.
+  if (
+    profile.activeStoreId !== schedule.storeId
+    || account.agent !== "codex"
+    || account.bindingState !== "ready"
+  ) {
+    return { code: 75, result: null };
   }
 
   const release = acquireExecutionLock(`task-resume-${schedule.id}`);
