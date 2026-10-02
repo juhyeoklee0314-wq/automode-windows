@@ -224,8 +224,8 @@ describe("task discovery safety boundary", () => {
     assert.match(renderer, /taskAccountFilter/);
     assert.match(renderer, /addTab\('all', 'All'/);
     assert.match(renderer, /addTab\('legacy', 'Legacy'/);
-    assert.match(renderer, /window\\.automode\\.resumeTask\\(item\\.accountId, item\\.storeId, item\\.id, item\\.updatedAt\\)/);
-    assert.match(renderer, /window\\.automode\\.scheduleTaskResume\\(\\s*item\\.accountId,\\s*item\\.storeId,/);
+    assert.match(renderer, /window\.automode\.resumeTask\(item\.accountId, item\.storeId, item\.id, item\.updatedAt\)/);
+    assert.match(renderer, /window\.automode\.scheduleTaskResume\(\s*item\.accountId,\s*item\.storeId,/);
     assert.doesNotMatch(renderer, /resumeTask\(taskAccountFilter/);
     assert.doesNotMatch(renderer, /scheduleTaskResume\(\s*taskAccountFilter/);
     assert.match(styles, /header \{ position:sticky; top:0;/);
