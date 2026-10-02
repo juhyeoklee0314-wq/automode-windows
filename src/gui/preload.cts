@@ -9,18 +9,20 @@ const DIAGNOSTIC_CHANNEL = "automode:diagnostic";
 const api: AutomodeApi = Object.freeze({
   getSnapshot: () => ipcRenderer.invoke("automode:get-snapshot"),
   getTaskInventory: () => ipcRenderer.invoke("automode:get-task-inventory"),
-  resumeTask: (accountId: string, threadId: string, expectedUpdatedAt: number | null) =>
-    ipcRenderer.invoke("automode:resume-task", accountId, threadId, expectedUpdatedAt),
-  scheduleTaskResume: (accountId: string, threadId: string, title: string, runAt: string, expectedUpdatedAt: number | null) =>
-    ipcRenderer.invoke("automode:schedule-task-resume", accountId, threadId, title, runAt, expectedUpdatedAt),
+  resumeTask: (profileId: string, storeId: string, threadId: string, expectedUpdatedAt: number | null) =>
+    ipcRenderer.invoke("automode:resume-task", profileId, storeId, threadId, expectedUpdatedAt),
+  scheduleTaskResume: (profileId: string, storeId: string, threadId: string, title: string, runAt: string, expectedUpdatedAt: number | null) =>
+    ipcRenderer.invoke("automode:schedule-task-resume", profileId, storeId, threadId, title, runAt, expectedUpdatedAt),
   cancelTaskResumeSchedule: (scheduleId: string) => ipcRenderer.invoke("automode:cancel-task-resume", scheduleId),
-  getAccountRateLimitStatus: (accountId: string) => ipcRenderer.invoke("automode:account-rate-limit-status", accountId),
+  getAccountRateLimitStatus: (profileId: string, storeId: string) => ipcRenderer.invoke("automode:account-rate-limit-status", profileId, storeId),
   save: (payload: SavePayload) => ipcRenderer.invoke("automode:save", payload),
   setScheduler: (enabled: boolean) => ipcRenderer.invoke("automode:set-scheduler", enabled),
   setRunAtLogin: (enabled: boolean) => ipcRenderer.invoke("automode:set-login", enabled),
   newAccountProfile: () => ipcRenderer.invoke("automode:new-account-profile"),
-  getAccountAuthStatus: (accountId: string) => ipcRenderer.invoke("automode:account-auth-status", accountId),
-  connectAccount: (accountId: string) => ipcRenderer.invoke("automode:account-connect", accountId),
+  newAccountStore: (profileId: string) => ipcRenderer.invoke("automode:new-account-store", profileId),
+  getAccountAuthStatus: (profileId: string, storeId?: string | null) => ipcRenderer.invoke("automode:account-auth-status", profileId, storeId ?? null),
+  connectAccount: (profileId: string, storeId?: string | null) => ipcRenderer.invoke("automode:account-connect", profileId, storeId ?? null),
+  activateAccountStore: (profileId: string, storeId: string) => ipcRenderer.invoke("automode:account-activate-store", profileId, storeId),
   openExternalLogin: (url: string, code: string) => ipcRenderer.invoke("automode:open-external-login", url, code),
   doctor: () => ipcRenderer.invoke("automode:doctor"),
   readLog: () => ipcRenderer.invoke("automode:read-log"),
