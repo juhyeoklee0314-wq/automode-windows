@@ -21,7 +21,7 @@ import { GuiService } from "./service.js";
 import { registerQuitHandler } from "./shutdown.js";
 import type { ExitSource } from "./shutdown.js";
 import { appIconPath, trayIconPath } from "./tray-icon.js";
-import type { SavePayload, SchedulerTaskStatus } from "./types.js";
+import type { AccountTarget, SavePayload, SchedulerTaskStatus } from "./types.js";
 import * as configmod from "../core/config.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -338,7 +338,7 @@ function startGui(): void {
       return !error;
     });
     ipcMain.handle("automode:export-diagnostic", async () => {
-      let accounts = [] as ReturnType<typeof loadPreferences>["accounts"];
+      let accounts: AccountTarget[] = [];
       let accountPreferencesError: string | undefined;
       try {
         accounts = activeAccountTargets(loadDiagnosticPreferences(configmod.load()));
