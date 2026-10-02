@@ -6,6 +6,7 @@ import { join, normalize, resolve } from "node:path";
 import { prepareStdioSpawn, resolveCodexNativeExecutable, which } from "../platform/command.js";
 import type {
   AccountProfile,
+  TaskInventoryAccountState,
   TaskInventoryItem,
   TaskInventorySnapshot,
   TaskInventorySource,
@@ -44,6 +45,30 @@ interface DiscoveryTarget {
   accountId: string | null;
   accountLabel: string;
 }
+
+interface SourceIdentity {
+  providerAccountId: string | null;
+  connectedEmail: string | null;
+  planType: string | null;
+  identityVerified: boolean;
+}
+
+interface ListedSource {
+  items: TaskInventoryItem[];
+  identity: SourceIdentity;
+}
+
+interface RolloutSource {
+  items: TaskInventoryItem[];
+  creatorByThread: Map<string, string>;
+}
+
+const emptyIdentity = (): SourceIdentity => ({
+  providerAccountId: null,
+  connectedEmail: null,
+  planType: null,
+  identityVerified: false,
+});
 
 function accountEnv(codexHome: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
@@ -199,8 +224,7 @@ export function parseRolloutInventoryText(
 
   if (!meta) return null;
   const id = safeString(meta.id, 100);
-  const creatorAccountId = safeString(meta.creator_account_id, 300);
-  if (!id || !creatorAccountId || !/^[0-9A-Fa-f-]{36}$/.test(id)) return null;
+  if (!id || !/^[0-9A-Fa-f-]{36}$/.test(id)) return null;
   if (!isUserResumableRolloutSource(meta.source)) return null;
 
   const createdAt = timestampSeconds(meta.timestamp);
@@ -226,25 +250,46 @@ export function parseRolloutInventoryText(
     historyMode: safeString(meta.history_mode, 80) ?? "legacy",
     sessionSource: sourceLabel(meta.source),
     originator: safeString(meta.originator, 120),
+    ownershipStatus: target.source === "account" ? "unverified" : "legacy",
     resumeEligibility: target.source === "account"
-      ? "same_profile_candidate"
+      ? "ownership_unverified"
       : "legacy_unassigned",
   };
 }
 
-function listRolloutSource(target: DiscoveryTarget): TaskInventoryItem[] {
-  if (target.source !== "account") return [];
+function rolloutCreatorAccountId(text: string): string | null {
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const record = asRecord(JSON.parse(line));
+      if (!record || record.type !== "session_meta") continue;
+      const payload = asRecord(record.payload);
+      return safeString(payload?.creator_account_id, 300);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function listRolloutSource(target: DiscoveryTarget): RolloutSource {
+  if (target.source !== "account") return { items: [], creatorByThread: new Map() };
   const items = new Map<string, TaskInventoryItem>();
+  const creatorByThread = new Map<string, string>();
   for (const path of activeRolloutPaths(target.codexHome)) {
     try {
       const modifiedAtSeconds = statSync(path).mtimeMs / 1000;
-      const item = parseRolloutInventoryText(readPrefix(path), modifiedAtSeconds, target);
-      if (item) items.set(item.id, item);
+      const text = readPrefix(path);
+      const item = parseRolloutInventoryText(text, modifiedAtSeconds, target);
+      if (!item) continue;
+      items.set(item.id, item);
+      const creatorAccountId = rolloutCreatorAccountId(text);
+      if (creatorAccountId) creatorByThread.set(item.id, creatorAccountId);
     } catch {
       // One malformed/inaccessible rollout must not hide other account tasks.
     }
   }
-  return [...items.values()];
+  return { items: [...items.values()], creatorByThread };
 }
 
 export function parseTaskInventoryThread(
@@ -277,8 +322,9 @@ export function parseTaskInventoryThread(
     historyMode: safeString(record.historyMode, 80) ?? "unknown",
     sessionSource: sourceLabel(record.source),
     originator: safeString(record.originator, 120),
+    ownershipStatus: target.source === "account" ? "unverified" : "legacy",
     resumeEligibility: target.source === "account"
-      ? "same_profile_candidate"
+      ? "ownership_unverified"
       : "legacy_unassigned",
   };
 }
@@ -422,12 +468,74 @@ async function initialize(session: AppServerSession, sourceKey: string): Promise
   session.child.stdin?.write(JSON.stringify({ method: "initialized" }) + "\n");
 }
 
-async function listSource(command: string, target: DiscoveryTarget): Promise<TaskInventoryItem[]> {
-  if (!existsSync(join(target.codexHome, "state_5.sqlite"))) return [];
+async function readSourceIdentity(
+  session: AppServerSession,
+  target: DiscoveryTarget,
+  timeoutMs: number,
+): Promise<SourceIdentity> {
+  if (target.source !== "account") return emptyIdentity();
+
+  const [accountRead, rateLimitsRead] = await Promise.allSettled([
+    rpc(session, `task-account-read-${target.accountId}`, "account/read", {
+      refreshToken: false,
+    }, timeoutMs),
+    rpc(session, `task-account-limits-${target.accountId}`, "account/rateLimits/read", {
+      excludeResetCreditDetails: true,
+    }, timeoutMs),
+  ]);
+
+  let connectedEmail: string | null = null;
+  let planType: string | null = null;
+  if (accountRead.status === "fulfilled" && !accountRead.value.error) {
+    const root = asRecord(accountRead.value.result);
+    const account = asRecord(root?.account);
+    if (account?.type === "chatgpt") {
+      connectedEmail = safeString(account.email, 320);
+      planType = safeString(account.planType, 80);
+    }
+  }
+
+  let providerAccountId: string | null = null;
+  if (rateLimitsRead.status === "fulfilled" && !rateLimitsRead.value.error) {
+    const root = asRecord(rateLimitsRead.value.result);
+    providerAccountId = safeString(root?.accountId, 300);
+  }
+
+  return {
+    providerAccountId,
+    connectedEmail,
+    planType,
+    identityVerified: providerAccountId !== null,
+  };
+}
+
+function classifyOwnership(
+  item: TaskInventoryItem,
+  creatorAccountId: string | null,
+  identity: SourceIdentity,
+): TaskInventoryItem {
+  if (item.source !== "account") {
+    return { ...item, ownershipStatus: "legacy", resumeEligibility: "legacy_unassigned" };
+  }
+  if (!creatorAccountId || !identity.providerAccountId) {
+    return { ...item, ownershipStatus: "unverified", resumeEligibility: "ownership_unverified" };
+  }
+  if (creatorAccountId !== identity.providerAccountId) {
+    return { ...item, ownershipStatus: "mismatch", resumeEligibility: "account_mismatch" };
+  }
+  return { ...item, ownershipStatus: "matched", resumeEligibility: "same_profile_candidate" };
+}
+
+async function listSource(command: string, target: DiscoveryTarget): Promise<ListedSource> {
+  if (!existsSync(join(target.codexHome, "state_5.sqlite"))) {
+    return { items: [], identity: emptyIdentity() };
+  }
   const session = await startAppServer(command, target.codexHome);
   const deadline = Date.now() + SOURCE_TIMEOUT_MS;
   try {
     await initialize(session, target.accountId ?? "legacy");
+    const remainingForIdentity = Math.max(1_000, Math.min(RPC_TIMEOUT_MS, deadline - Date.now()));
+    const identity = await readSourceIdentity(session, target, remainingForIdentity);
     const byId = new Map<string, TaskInventoryItem>();
     let cursor: string | null = null;
     let page = 0;
@@ -458,9 +566,12 @@ async function listSource(command: string, target: DiscoveryTarget): Promise<Tas
       cursor = parsed.nextCursor;
     } while (cursor);
 
-    return [...byId.values()].sort((a, b) =>
-      (b.recencyAt ?? b.updatedAt ?? b.createdAt ?? 0) -
-      (a.recencyAt ?? a.updatedAt ?? a.createdAt ?? 0));
+    return {
+      identity,
+      items: [...byId.values()].sort((a, b) =>
+        (b.recencyAt ?? b.updatedAt ?? b.createdAt ?? 0) -
+        (a.recencyAt ?? a.updatedAt ?? a.createdAt ?? 0)),
+    };
   } finally {
     stopSession(session);
   }
@@ -504,11 +615,36 @@ function discoveryTargets(accounts: AccountProfile[]): DiscoveryTarget[] {
 
 export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<TaskInventorySnapshot> {
   const generatedAt = new Date().toISOString();
+  const accountStates: TaskInventoryAccountState[] = accounts
+    .filter((account) => account.agent === "codex")
+    .map((account) => ({
+      accountId: account.id,
+      accountLabel: account.displayName,
+      connectedEmail: null,
+      planType: null,
+      identityVerified: false,
+    }));
+
+  const setAccountState = (target: DiscoveryTarget, identity: SourceIdentity) => {
+    if (target.source !== "account" || !target.accountId) return;
+    const index = accountStates.findIndex((entry) => entry.accountId === target.accountId);
+    const state: TaskInventoryAccountState = {
+      accountId: target.accountId,
+      accountLabel: target.accountLabel,
+      connectedEmail: identity.connectedEmail,
+      planType: identity.planType,
+      identityVerified: identity.identityVerified,
+    };
+    if (index >= 0) accountStates[index] = state;
+    else accountStates.push(state);
+  };
+
   const command = which("codex");
   if (!command) {
     return {
       generatedAt,
       items: [],
+      accounts: accountStates,
       errors: [{
         source: "legacy_global",
         accountId: null,
@@ -524,22 +660,30 @@ export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<Ta
   for (const target of discoveryTargets(accounts)) {
     try {
       if (target.source === "account") {
-        const rolloutItems = listRolloutSource(target);
-        let indexedItems: TaskInventoryItem[] = [];
+        const rollout = listRolloutSource(target);
+        let listed: ListedSource = { items: [], identity: emptyIdentity() };
         try {
-          indexedItems = await listSource(command, target);
+          listed = await listSource(command, target);
         } catch (error) {
-          if (!rolloutItems.length) throw error;
+          if (!rollout.items.length) throw error;
         }
+        setAccountState(target, listed.identity);
+
         const merged = new Map<string, TaskInventoryItem>();
-        for (const item of rolloutItems) merged.set(item.id, item);
-        // Indexed metadata is canonical when present; rollout scanning is a read-only fallback.
-        for (const item of indexedItems) merged.set(item.id, item);
-        items.push(...merged.values());
+        for (const item of rollout.items) merged.set(item.id, item);
+        // Indexed metadata is canonical when present; rollout scanning supplies creator identity.
+        for (const item of listed.items) merged.set(item.id, item);
+
+        for (const item of merged.values()) {
+          const creatorAccountId = rollout.creatorByThread.get(item.id) ?? null;
+          items.push(classifyOwnership(item, creatorAccountId, listed.identity));
+        }
       } else {
-        items.push(...await listSource(command, target));
+        const listed = await listSource(command, target);
+        items.push(...listed.items.map((item) => classifyOwnership(item, null, listed.identity)));
       }
     } catch (error) {
+      if (target.source === "account") setAccountState(target, emptyIdentity());
       errors.push({
         source: target.source,
         accountId: target.accountId,
@@ -553,5 +697,5 @@ export async function discoverCodexTasks(accounts: AccountProfile[]): Promise<Ta
     (b.recencyAt ?? b.updatedAt ?? b.createdAt ?? 0) -
     (a.recencyAt ?? a.updatedAt ?? a.createdAt ?? 0));
 
-  return { generatedAt, items, errors };
+  return { generatedAt, items, errors, accounts: accountStates };
 }
