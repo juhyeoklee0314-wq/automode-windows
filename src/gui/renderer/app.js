@@ -1,5 +1,8 @@
 const $ = (id) => document.getElementById(id);
 let snapshot;
+let taskInventorySnapshot = null;
+let taskAccountFilter = 'all';
+let taskSearchQuery = '';
 
 function showBanner(message, error = false) {
   const el = $("banner");
@@ -49,6 +52,7 @@ function render(data) {
   }
   renderAccounts(p.accounts);
   renderTaskResumeSchedules(p.taskResumeSchedules || []);
+  if (taskInventorySnapshot) renderTaskInventory(taskInventorySnapshot);
   const tasks = $("task-list");
   tasks.replaceChildren();
   if (!data.scheduler.length) tasks.innerHTML = '<p class="muted">No GUI scheduler tasks installed.</p>';
@@ -446,52 +450,197 @@ function defaultTaskScheduleValue() {
   return local.toISOString().slice(0, 16);
 }
 
+function taskTimestamp(item) {
+  const value = item?.recencyAt ?? item?.updatedAt ?? item?.createdAt;
+  return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function taskFilterOptions(data) {
+  const counts = new Map();
+  for (const item of data.items || []) {
+    if (item.source === 'account' && item.accountId) {
+      counts.set(item.accountId, (counts.get(item.accountId) || 0) + 1);
+    }
+  }
+
+  const configured = (snapshot?.preferences?.accounts || [])
+    .filter((account) => account.agent === 'codex' && account.enabled !== false)
+    .map((account) => ({
+      id: account.id,
+      label: account.displayName || account.id,
+      count: counts.get(account.id) || 0,
+    }));
+
+  for (const item of data.items || []) {
+    if (item.source !== 'account' || !item.accountId) continue;
+    if (configured.some((account) => account.id === item.accountId)) continue;
+    configured.push({
+      id: item.accountId,
+      label: item.accountLabel || item.accountId,
+      count: counts.get(item.accountId) || 0,
+    });
+  }
+
+  return {
+    accounts: configured,
+    legacyCount: (data.items || []).filter((item) => item.source === 'legacy_global').length,
+    total: (data.items || []).length,
+  };
+}
+
+function renderTaskAccountTabs(data) {
+  const root = $('task-account-tabs');
+  if (!root) return;
+  const options = taskFilterOptions(data);
+  const validFilters = new Set(['all', 'legacy', ...options.accounts.map((account) => account.id)]);
+  if (!validFilters.has(taskAccountFilter)) taskAccountFilter = 'all';
+
+  root.replaceChildren();
+
+  const addTab = (id, label, count, legacy = false) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'task-account-tab'
+      + (legacy ? ' legacy-tab' : '')
+      + (taskAccountFilter === id ? ' active' : '');
+    button.dataset.taskFilter = id;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', taskAccountFilter === id ? 'true' : 'false');
+
+    const text = document.createElement('span');
+    text.textContent = label;
+    const badge = document.createElement('span');
+    badge.className = 'count';
+    badge.textContent = String(count);
+    button.append(text, badge);
+
+    button.onclick = () => {
+      taskAccountFilter = id;
+      renderTaskInventory(taskInventorySnapshot || data);
+      renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
+    };
+    root.append(button);
+  };
+
+  addTab('all', 'All', options.total);
+  options.accounts.forEach((account) => addTab(account.id, account.label, account.count));
+  addTab('legacy', 'Legacy', options.legacyCount, true);
+}
+
+function taskMatchesFilter(item) {
+  if (taskAccountFilter === 'legacy') return item.source === 'legacy_global';
+  if (taskAccountFilter !== 'all') return item.source === 'account' && item.accountId === taskAccountFilter;
+  return true;
+}
+
+function taskMatchesSearch(item) {
+  const query = taskSearchQuery.trim().toLowerCase();
+  if (!query) return true;
+  return [
+    item.title,
+    item.preview,
+    item.cwd,
+    item.accountLabel,
+    item.model,
+    item.sessionSource,
+  ].filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+}
+
+function activeTaskSchedule(item) {
+  if (!item?.accountId) return null;
+  return (snapshot?.preferences?.taskResumeSchedules || []).find((schedule) =>
+    schedule.enabled
+    && schedule.accountId === item.accountId
+    && schedule.threadId === item.id
+  ) || null;
+}
+
+function taskState(item) {
+  if (item.source === 'legacy_global') return { label: 'LEGACY', className: '' };
+  const scheduled = activeTaskSchedule(item);
+  if (scheduled) {
+    return {
+      label: 'SCHEDULED',
+      className: 'scheduled',
+      title: new Date(scheduled.runAt).toLocaleString(),
+    };
+  }
+  const status = String(item.status || '').toLowerCase();
+  if (status.includes('active') || status.includes('running') || status.includes('inprogress')) {
+    return { label: 'RUNNING', className: 'running' };
+  }
+  return { label: 'READY', className: 'ready' };
+}
+
+function syncTaskHeader(page) {
+  const tabs = $('task-account-tabs');
+  if (!tabs) return;
+  tabs.classList.toggle('hidden', page !== 'tasks');
+}
+
 function renderTaskResumeSchedules(schedules) {
-  const root = $("task-resume-schedule-list");
+  const root = $('task-resume-schedule-list');
   if (!root) return;
   root.replaceChildren();
-  if (!schedules.length) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = "No task resumes are scheduled.";
+
+  const filtered = (schedules || []).filter((schedule) => {
+    if (taskAccountFilter === 'legacy') return false;
+    if (taskAccountFilter === 'all') return true;
+    return schedule.accountId === taskAccountFilter;
+  });
+
+  if (!filtered.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = taskAccountFilter === 'all'
+      ? 'No task resumes are scheduled.'
+      : 'No task resumes are scheduled for this account filter.';
     root.append(empty);
     return;
   }
 
-  schedules
+  filtered
     .slice()
     .sort((a, b) => new Date(a.runAt).getTime() - new Date(b.runAt).getTime())
     .forEach((schedule) => {
-      const row = document.createElement("div");
-      row.className = "task-resume-schedule";
+      const row = document.createElement('div');
+      row.className = 'task-resume-schedule';
 
-      const copy = document.createElement("div");
-      const title = document.createElement("strong");
-      title.textContent = schedule.title || "Codex task";
-      const meta = document.createElement("small");
+      const copy = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = schedule.title || 'Codex task';
+      const meta = document.createElement('small');
       const account = snapshot?.preferences?.accounts?.find((entry) => entry.id === schedule.accountId);
       meta.textContent = [
         account?.displayName || schedule.accountId,
         new Date(schedule.runAt).toLocaleString(),
-        schedule.enabled ? "Scheduled" : schedule.lastStatus || "Finished",
-      ].join(" · ");
+      ].join(' · ');
       copy.append(title, meta);
 
-      const cancel = document.createElement("button");
-      cancel.className = "remove small";
-      cancel.textContent = schedule.enabled ? "Cancel" : "Remove";
+      const actions = document.createElement('div');
+      actions.className = 'task-resume-schedule-actions';
+      const state = document.createElement('span');
+      state.className = 'badge ' + (schedule.enabled ? 'scheduled' : 'finished');
+      state.textContent = schedule.enabled
+        ? 'SCHEDULED'
+        : String(schedule.lastStatus || 'FINISHED').toUpperCase();
+
+      const cancel = document.createElement('button');
+      cancel.className = 'remove small';
+      cancel.textContent = schedule.enabled ? 'Cancel' : 'Remove';
       cancel.onclick = async () => {
         cancel.disabled = true;
         try {
           render(await window.automode.cancelTaskResumeSchedule(schedule.id));
-          showBanner("Task resume schedule removed.");
+          showBanner('Task resume schedule removed.');
         } catch (error) {
-          showBanner(`Could not remove task resume schedule: ${error.message || error}`, true);
+          showBanner('Could not remove task resume schedule: ' + (error.message || error), true);
           cancel.disabled = false;
         }
       };
 
-      row.append(copy, cancel);
+      actions.append(state, cancel);
+      row.append(copy, actions);
       root.append(row);
     });
 }
@@ -564,87 +713,117 @@ async function scheduleTaskAtReset(item, button) {
 }
 
 function renderTaskInventory(data) {
-  const root = $("codex-task-list");
-  const summary = $("task-inventory-summary");
+  taskInventorySnapshot = data;
+  renderTaskAccountTabs(data);
+
+  const root = $('codex-task-list');
+  const summary = $('task-inventory-summary');
   root.replaceChildren();
 
-  const accountCount = data.items.filter((item) => item.source === "account").length;
-  const legacyCount = data.items.filter((item) => item.source === "legacy_global").length;
+  const accountCount = data.items.filter((item) => item.source === 'account').length;
+  const legacyCount = data.items.filter((item) => item.source === 'legacy_global').length;
   const errorCount = data.errors.length;
-  summary.textContent = [
-    `${accountCount} account task${accountCount === 1 ? "" : "s"}`,
-    `${legacyCount} legacy task${legacyCount === 1 ? "" : "s"}`,
-    errorCount ? `${errorCount} source error${errorCount === 1 ? "" : "s"}` : null,
-  ].filter(Boolean).join(" · ");
+  const filteredItems = data.items
+    .filter(taskMatchesFilter)
+    .filter(taskMatchesSearch)
+    .slice()
+    .sort((a, b) => taskTimestamp(b) - taskTimestamp(a));
 
-  if (!data.items.length) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = errorCount
-      ? "No tasks could be loaded from the available Codex stores."
-      : "No Codex tasks were found.";
+  let filterLabel = null;
+  if (taskAccountFilter === 'legacy') {
+    filterLabel = 'Legacy';
+  } else if (taskAccountFilter !== 'all') {
+    filterLabel = (snapshot?.preferences?.accounts || [])
+      .find((account) => account.id === taskAccountFilter)?.displayName || taskAccountFilter;
+  }
+
+  summary.textContent = [
+    accountCount + ' account task' + (accountCount === 1 ? '' : 's'),
+    legacyCount + ' legacy task' + (legacyCount === 1 ? '' : 's'),
+    filterLabel
+      ? 'showing ' + filteredItems.length + ' for ' + filterLabel
+      : (taskSearchQuery ? 'showing ' + filteredItems.length + ' matches' : null),
+    errorCount ? errorCount + ' source error' + (errorCount === 1 ? '' : 's') : null,
+  ].filter(Boolean).join(' · ');
+
+  if (!filteredItems.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = data.items.length
+      ? 'No tasks match the current account filter or search.'
+      : errorCount
+        ? 'No tasks could be loaded from the available Codex stores.'
+        : 'No Codex tasks were found.';
     root.append(empty);
   }
 
-  data.items.forEach((item) => {
-    const row = document.createElement("div");
-    row.className = `codex-task-row ${item.source === "legacy_global" ? "legacy" : "owned"}`;
+  filteredItems.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'codex-task-row ' + (item.source === 'legacy_global' ? 'legacy' : 'owned');
 
-    const copy = document.createElement("div");
-    copy.className = "codex-task-copy";
-    const title = document.createElement("strong");
+    const copy = document.createElement('div');
+    copy.className = 'codex-task-copy';
+    const title = document.createElement('strong');
     title.textContent = item.title;
-    const meta = document.createElement("small");
+    const meta = document.createElement('small');
     meta.textContent = [
       item.accountLabel,
       item.model,
       item.sessionSource,
-      formatTaskTime(item.recencyAt ?? item.updatedAt ?? item.createdAt),
-    ].filter(Boolean).join(" · ");
-    const cwd = document.createElement("small");
-    cwd.className = "codex-task-cwd";
-    cwd.textContent = item.cwd || "Working directory unavailable";
+      formatTaskTime(taskTimestamp(item)),
+    ].filter(Boolean).join(' · ');
+    const cwd = document.createElement('small');
+    cwd.className = 'codex-task-cwd';
+    cwd.textContent = item.cwd || 'Working directory unavailable';
     copy.append(title, meta, cwd);
 
-    const actions = document.createElement("div");
-    actions.className = "codex-task-actions";
-    const badge = document.createElement("span");
-    badge.className = `badge ${item.source === "account" ? "ok" : ""}`;
-    badge.textContent = item.source === "account" ? "ACCOUNT TASK" : "LEGACY / GLOBAL";
-    actions.append(badge);
+    const actions = document.createElement('div');
+    actions.className = 'codex-task-actions';
 
-    if (item.resumeEligibility === "same_profile_candidate" && item.accountId) {
-      const resume = document.createElement("button");
-      resume.className = "secondary small";
-      resume.textContent = "Resume now";
+    const ownership = document.createElement('span');
+    ownership.className = 'badge ' + (item.source === 'account' ? 'ok' : '');
+    ownership.textContent = item.source === 'account' ? 'ACCOUNT TASK' : 'LEGACY / GLOBAL';
+
+    const operational = taskState(item);
+    const operationalBadge = document.createElement('span');
+    operationalBadge.className = 'badge ' + operational.className;
+    operationalBadge.textContent = operational.label;
+    if (operational.title) operationalBadge.title = operational.title;
+
+    actions.append(ownership, operationalBadge);
+
+    if (item.resumeEligibility === 'same_profile_candidate' && item.accountId) {
+      const resume = document.createElement('button');
+      resume.className = 'secondary small';
+      resume.textContent = 'Resume now';
       resume.onclick = () => resumeTaskNow(item, resume);
 
-      const scheduleWrap = document.createElement("div");
-      scheduleWrap.className = "task-resume-controls";
-      const when = document.createElement("input");
-      when.type = "datetime-local";
-      when.className = "task-resume-time";
+      const scheduleWrap = document.createElement('div');
+      scheduleWrap.className = 'task-resume-controls';
+      const when = document.createElement('input');
+      when.type = 'datetime-local';
+      when.className = 'task-resume-time';
       when.value = defaultTaskScheduleValue();
 
-      const schedule = document.createElement("button");
-      schedule.className = "secondary small";
-      schedule.textContent = "Schedule";
+      const schedule = document.createElement('button');
+      schedule.className = 'secondary small';
+      schedule.textContent = 'Schedule';
       schedule.onclick = () => scheduleTaskAt(item, when.value);
 
-      const reset = document.createElement("button");
-      reset.className = "secondary small";
-      reset.textContent = "At reset";
-      reset.title = "Use the selected account's current Codex rate-limit reset time plus the configured grace period.";
+      const reset = document.createElement('button');
+      reset.className = 'secondary small';
+      reset.textContent = 'At reset';
+      reset.title = 'Use the selected account current Codex rate-limit reset time plus the configured grace period.';
       reset.onclick = () => scheduleTaskAtReset(item, reset);
 
       scheduleWrap.append(when, schedule, reset);
       actions.append(resume, scheduleWrap);
     } else {
-      const disabled = document.createElement("button");
-      disabled.className = "secondary small";
+      const disabled = document.createElement('button');
+      disabled.className = 'secondary small';
       disabled.disabled = true;
-      disabled.textContent = "Cross-account unavailable";
-      disabled.title = "Legacy / Global tasks cannot be resumed through an isolated account store.";
+      disabled.textContent = 'Cross-account unavailable';
+      disabled.title = 'Legacy / Global tasks cannot be resumed through an isolated account store.';
       actions.append(disabled);
     }
 
@@ -652,16 +831,22 @@ function renderTaskInventory(data) {
     root.append(row);
   });
 
-  data.errors.forEach((entry) => {
-    const error = document.createElement("div");
-    error.className = "task-source-error";
-    const title = document.createElement("strong");
-    title.textContent = entry.accountLabel;
-    const detail = document.createElement("small");
-    detail.textContent = entry.detail;
-    error.append(title, detail);
-    root.append(error);
-  });
+  data.errors
+    .filter((entry) => taskAccountFilter === 'all'
+      || (taskAccountFilter === 'legacy' && entry.source === 'legacy_global')
+      || entry.accountId === taskAccountFilter)
+    .forEach((entry) => {
+      const error = document.createElement('div');
+      error.className = 'task-source-error';
+      const title = document.createElement('strong');
+      title.textContent = entry.accountLabel;
+      const detail = document.createElement('small');
+      detail.textContent = entry.detail;
+      error.append(title, detail);
+      root.append(error);
+    });
+
+  renderTaskResumeSchedules(snapshot?.preferences?.taskResumeSchedules || []);
 }
 
 async function refreshTasks() {
@@ -682,13 +867,14 @@ async function refreshTasks() {
   }
 }
 
-document.querySelectorAll(".nav").forEach((button) => button.onclick = () => {
-  document.querySelectorAll(".nav,.page").forEach((el) => el.classList.remove("active"));
-  button.classList.add("active");
-  $(`page-${button.dataset.page}`).classList.add("active");
-  $("page-title").textContent = button.textContent;
-  if (button.dataset.page === "logs") refreshLog();
-  if (button.dataset.page === "tasks") refreshTasks();
+document.querySelectorAll('.nav').forEach((button) => button.onclick = () => {
+  document.querySelectorAll('.nav,.page').forEach((el) => el.classList.remove('active'));
+  button.classList.add('active');
+  $('page-' + button.dataset.page).classList.add('active');
+  $('page-title').textContent = button.textContent;
+  syncTaskHeader(button.dataset.page);
+  if (button.dataset.page === 'logs') refreshLog();
+  if (button.dataset.page === 'tasks') refreshTasks();
 });
 
 $("add-account").onclick = async () => {
@@ -766,6 +952,10 @@ $("export-diagnostic").onclick = async () => {
   }
 };
 $("refresh-tasks").onclick = refreshTasks;
+$("task-search").oninput = (event) => {
+  taskSearchQuery = String(event.target.value || '');
+  if (taskInventorySnapshot) renderTaskInventory(taskInventorySnapshot);
+};
 
 async function refreshLog() { $("log-content").textContent = await window.automode.readLog(); }
 $("refresh-log").onclick = refreshLog;
@@ -773,5 +963,6 @@ $("open-log").onclick = () => window.automode.openLogFolder();
 
 window.addEventListener("error", () => window.automode.rendererEvent("RENDERER_ERROR"));
 window.addEventListener("unhandledrejection", () => window.automode.rendererEvent("RENDERER_UNHANDLED_REJECTION"));
-window.automode.getSnapshot().then(render).catch((error) => showBanner(`Startup failed: ${error.message || error}`, true));
+syncTaskHeader(document.querySelector('.nav.active')?.dataset.page || 'overview');
+window.automode.getSnapshot().then(render).catch((error) => showBanner('Startup failed: ' + (error.message || error), true));
 window.automode.rendererReady();
