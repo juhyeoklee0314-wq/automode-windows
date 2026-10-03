@@ -164,10 +164,12 @@ describe("multi-account scheduler reconciliation", () => {
     const accountA = {
       id: "account-a", displayName: "A", enabled: true, message: "hi",
       schedules: ["06:00"], agent: "codex" as const, catchupMinutes: 10,
+      codexHome: "C:\\PingGPT\\account-a", storeId: "store-account-a", storeBindingState: "bound" as const,
     };
     const accountB = {
       id: "account-b", displayName: "B", enabled: true, message: "hi",
       schedules: ["07:00"], agent: "codex" as const, catchupMinutes: 20,
+      codexHome: "C:\\PingGPT\\account-b", storeId: "store-account-b", storeBindingState: "bound" as const,
     };
     scheduler.install([accountA, accountB]);
     calls.length = 0;
@@ -183,10 +185,12 @@ describe("multi-account scheduler reconciliation", () => {
     const accountA = {
       id: "account-a", displayName: "A", enabled: true, message: "hi",
       schedules: ["06:00"], agent: "codex" as const, catchupMinutes: 10,
+      codexHome: "C:\\PingGPT\\account-a", storeId: "store-account-a", storeBindingState: "bound" as const,
     };
     const accountB = {
       id: "account-b", displayName: "B", enabled: true, message: "hi",
       schedules: ["07:00"], agent: "codex" as const, catchupMinutes: 20,
+      codexHome: "C:\\PingGPT\\account-b", storeId: "store-account-b", storeBindingState: "bound" as const,
     };
     const installScheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", () => ({ ok: true, output: "Ready" }), receipt);
     installScheduler.install([accountA, accountB]);
@@ -208,12 +212,14 @@ describe("multi-account scheduler reconciliation", () => {
       return { ok: true, output: "Ready" };
     }, receipt);
     scheduler.install([
-      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
-      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
+      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true, codexHome: "C:\\PingGPT\\a", storeId: "store-a", storeBindingState: "bound" as const },
+      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false, codexHome: "C:\\PingGPT\\b", storeId: "store-b", storeBindingState: "bound" as const },
     ]);
     assert.equal(actions.length, 2);
     assert.match(actions[0] ?? "", /"profile-a"/);
+    assert.match(actions[0] ?? "", /"store-a"/);
     assert.match(actions[1] ?? "", /"profile-a-long"/);
+    assert.match(actions[1] ?? "", /"store-b"/);
   });
 
   it("configures wake only for selected profiles and keeps every task AC-only", () => {
@@ -224,8 +230,8 @@ describe("multi-account scheduler reconciliation", () => {
       return { ok: true, output: "Ready" };
     }, receipt);
     scheduler.install([
-      { id: "wake", displayName: "Wake", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
-      { id: "no-wake", displayName: "No Wake", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
+      { id: "wake", displayName: "Wake", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true, codexHome: "C:\\PingGPT\\wake", storeId: "store-wake", storeBindingState: "bound" as const },
+      { id: "no-wake", displayName: "No Wake", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false, codexHome: "C:\\PingGPT\\no-wake", storeId: "store-no-wake", storeBindingState: "bound" as const },
     ]);
     const powerCalls = calls.filter((args) => args[0] === "@ConfigurePower");
     assert.equal(powerCalls.length, 2);
