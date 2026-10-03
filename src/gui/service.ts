@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import * as detect from "../agents/detect.js";
 import * as dialogs from "../agents/dialogs.js";
 import { which } from "../agents/ping.js";
 import * as configmod from "../core/config.js";
+import { readRecentLog } from "../core/log.js";
 import { redactSecrets } from "../core/redact.js";
 import { nextOccurrence, parseHhmm, resolveTz } from "../core/timeutil.js";
 import { codexAuthStatus, startCodexLogin } from "./account-auth.js";
@@ -490,11 +490,7 @@ export class GuiService {
   }
 
   readLog(): string {
-    try {
-      const text = readFileSync(configmod.logPath(), "utf8");
-      return redactSecrets(text.slice(-200_000));
-    } catch {
-      return "No log entries yet.";
-    }
+    const text = readRecentLog(configmod.logPath());
+    return text ? redactSecrets(text) : "No log entries yet.";
   }
 }
