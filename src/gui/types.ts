@@ -59,6 +59,7 @@ export type AccountAuthState =
   | "profile_missing"
   | "account_unverified"
   | "account_mismatch"
+  | "account_already_stored"
   | "migration_review";
 
 export interface AccountAuthStatus {
@@ -68,8 +69,19 @@ export interface AccountAuthStatus {
   email?: string | null;
   planType?: string | null;
   identityVerified?: boolean;
+  storeId?: string | null;
+  existingStoreId?: string | null;
   loginUrl?: string;
   loginCode?: string;
+}
+
+export interface AccountStoreSummary {
+  profileId: string;
+  storeId: string;
+  active: boolean;
+  bindingState: AccountStoreBindingState;
+  email: string | null;
+  planType: string | null;
 }
 
 export interface TaskResumeSchedule {
