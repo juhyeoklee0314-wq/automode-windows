@@ -65,9 +65,26 @@ describe("R1.07 account switch transaction", () => {
     assert.match(service.slice(catchAt), /ACCOUNT_STORE_ACTIVATION_ROLLED_BACK/);
   });
 
-  it("does not install Codex ping tasks for a profile with no active store", () => {
+  it("does not install Codex ping tasks for a profile without a runnable account store", () => {
     const scheduler = source("src/gui/scheduler.ts");
-    assert.match(scheduler, /entry\.agent !== "codex" \|\| Boolean\(entry\.codexHome\)/);
+    assert.match(scheduler, /Boolean\(entry\.codexHome\)/);
+    assert.match(scheduler, /entry\.storeBindingState !== "pending"/);
+    assert.match(scheduler, /entry\.storeBindingState !== "migration_review"/);
+  });
+
+  it("binds each Windows scheduled ping to the exact account store and rejects stale tasks", () => {
+    const scheduler = source("src/gui/scheduler.ts");
+    const runner = source("src/gui/scheduled-runner.ts");
+    const routing = source("src/gui/routing.ts");
+    assert.match(scheduler, /"--scheduled-runner", accountId, storeId \?\? "-", scheduleId/);
+    const staleAt = runner.indexOf("PING_ACCOUNT_STORE_STALE_TASK_REJECTED");
+    const verifyAt = runner.indexOf("ensureActiveAccountStore(accountId)", staleAt);
+    const pingAt = runner.indexOf("reliablePing(account.agent", staleAt);
+    assert.ok(staleAt >= 0);
+    assert.ok(verifyAt > staleAt);
+    assert.ok(pingAt > verifyAt);
+    assert.match(routing, /storeId: null, scheduleId: second/);
+    assert.match(routing, /storeId: second \|\| null, scheduleId: third/);
   });
 
   it("pauses inactive one-shot resumes and refuses stale-store execution", () => {
