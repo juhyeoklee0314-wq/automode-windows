@@ -25,7 +25,7 @@ describe("R1.07 delivery and rollback contract", () => {
   it("backs up schema-sensitive preferences, config, receipts, and PingGPT-owned Windows tasks before code mutation", () => {
     const apply = source("scripts/pinggpt-r107-runtime-patch-apply.template.ps1");
     const backupAt = apply.indexOf("Backup-StateFile 'PREFERENCES'");
-    const schedulerAt = apply.indexOf("Backup-ScheduledTasks");
+    const schedulerAt = apply.indexOf("\n        Backup-ScheduledTasks", backupAt);
     const mutationAt = apply.indexOf("$MutationStarted = $true");
     assert.ok(backupAt >= 0);
     assert.ok(schedulerAt > backupAt);
