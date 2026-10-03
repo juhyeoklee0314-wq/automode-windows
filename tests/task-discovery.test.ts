@@ -242,14 +242,20 @@ describe("task discovery safety boundary", () => {
     assert.doesNotMatch(renderer, /label:\s*\(account\.displayName \|\| account\.id\) \+ ' · ' \+ connected/);
   });
 
-  it("refreshes task ownership after reconnect and keeps manual refresh fresh", () => {
+  it("refreshes task ownership after a verified account-store activation and keeps manual refresh fresh", () => {
     const renderer = source("src/gui/renderer/app.js");
     const discovery = source("src/gui/codex-task-discovery.ts");
 
-    const pollAt = renderer.indexOf("async function pollAuthStatus");
-    const reconnectRefreshAt = renderer.indexOf('refreshTasks({ source: "reconnect", quiet: true })', pollAt);
+    const pollAt = renderer.indexOf("async function pollAccountStoreAuth");
+    const storeStatusAt = renderer.indexOf("getAccountStoreAuthStatus(profileId, storeId)", pollAt);
+    const activateFnAt = renderer.indexOf("async function activateVerifiedStore");
+    const activateAt = renderer.indexOf("activateAccountStore(profileId, storeId)", activateFnAt);
+    const refreshAt = renderer.indexOf('refreshTasks({ source: "account-switch", quiet: true })', activateAt);
     assert.ok(pollAt >= 0);
-    assert.ok(reconnectRefreshAt > pollAt);
+    assert.ok(storeStatusAt > pollAt);
+    assert.ok(activateFnAt >= 0);
+    assert.ok(activateAt > activateFnAt);
+    assert.ok(refreshAt > activateAt);
     assert.match(renderer, /\$\("refresh-tasks"\)\.onclick = \(\) => refreshTasks\(\{ source: "manual" \}\)/);
     assert.match(renderer, /window\.automode\.getTaskInventory\(\)/);
 
