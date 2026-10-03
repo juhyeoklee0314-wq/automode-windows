@@ -82,7 +82,8 @@ export const taskName = (accountId: string, scheduleId: string): string =>
 
 function desiredTasks(accounts: AccountProfile[]): DesiredTask[] {
   const desired: DesiredTask[] = [];
-  for (const account of accounts.filter((entry) => entry.enabled)) {
+  for (const account of accounts.filter((entry) =>
+    entry.enabled && (entry.agent !== "codex" || Boolean(entry.codexHome && entry.storeId)))) {
     account.schedules.forEach((time, index) => {
       if (!parseHhmm(time)) return;
       const scheduleId = `${time.replace(":", "")}-${index}`;
