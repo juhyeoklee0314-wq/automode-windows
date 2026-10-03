@@ -37,6 +37,18 @@ describe("R1.07 account switch transaction", () => {
     assert.match(runtime.slice(duplicateAt, bindAt), /account_already_stored/);
   });
 
+  it("reloads canonical store bindings before syncing one-shot resumes after Save", () => {
+    const service = source("src/gui/service.ts");
+    const saveAt = service.indexOf("save(payload: SavePayload)");
+    const persistAt = service.indexOf("savePreferences(payload.preferences)", saveAt);
+    const reloadAt = service.indexOf("const savedPreferences = loadPreferences", persistAt);
+    const syncAt = service.indexOf("activeTaskResumeSchedules(savedPreferences)", reloadAt);
+    assert.ok(saveAt >= 0);
+    assert.ok(persistAt > saveAt);
+    assert.ok(reloadAt > persistAt);
+    assert.ok(syncAt > reloadAt);
+  });
+
   it("pauses inactive one-shot resumes and refuses stale-store execution", () => {
     const preferences = source("src/gui/preferences.ts");
     const main = source("src/gui/main.ts");
