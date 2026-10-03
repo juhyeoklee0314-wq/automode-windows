@@ -74,7 +74,10 @@ export interface AccountAuthStatus {
 
 export interface TaskResumeSchedule {
   id: string;
+  /** Local profile id; retained as accountId for renderer/API compatibility in R1.07. */
   accountId: string;
+  /** Exact account store that owns the task. */
+  storeId: string;
   threadId: string;
   title: string;
   runAt: string;
