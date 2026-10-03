@@ -12,7 +12,7 @@ import { ensureActiveAccountStore } from "./account-store-runtime.js";
 import { discoverCodexTasks } from "./codex-task-discovery.js";
 import { readAccountRateLimitStatus, resumeCodexTask } from "./codex-task-runtime.js";
 import { leaseIsLive, writeLease } from "./lease.js";
-import { loadPreferences, newAccountProfile as createAccountProfile, savePreferences } from "./preferences.js";
+import { activeTaskResumeSchedules, loadPreferences, newAccountProfile as createAccountProfile, savePreferences } from "./preferences.js";
 import { WindowsScheduler } from "./scheduler.js";
 import { TaskResumeScheduler } from "./task-resume-scheduler.js";
 import type { AccountAuthStatus, AccountProfile, AccountRateLimitStatus, AppSnapshot, DoctorCheck, GuiPreferences, SavePayload, TaskInventorySnapshot, TaskResumeResult } from "./types.js";
@@ -178,6 +178,7 @@ export class GuiService {
     const schedule = {
       id: `resume-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
       accountId,
+      storeId: account.storeId!,
       threadId,
       title: String(title || owned.title || "Codex task").slice(0, 240),
       runAt: when.toISOString(),
@@ -191,11 +192,11 @@ export class GuiService {
     preferences.taskResumeSchedules.push(schedule);
     savePreferences(preferences);
     try {
-      this.taskResumeScheduler.sync(preferences.taskResumeSchedules);
+      this.taskResumeScheduler.sync(activeTaskResumeSchedules(preferences));
     } catch (error) {
       preferences.taskResumeSchedules = preferences.taskResumeSchedules.filter((entry) => entry.id !== schedule.id);
       savePreferences(preferences);
-      try { this.taskResumeScheduler.sync(preferences.taskResumeSchedules); } catch { /* preserve original scheduler error */ }
+      try { this.taskResumeScheduler.sync(activeTaskResumeSchedules(preferences)); } catch { /* preserve original scheduler error */ }
       throw error;
     }
     return this.snapshot();
