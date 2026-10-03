@@ -12,6 +12,39 @@ export interface AccountProfile {
   wakePc?: boolean;
 }
 
+export interface AutomationSettings {
+  message: string;
+  schedules: string[];
+  catchupMinutes?: number;
+  wakePc?: boolean;
+}
+
+export type AccountStoreBindingState =
+  | "pending"
+  | "bound"
+  | "migration_pending"
+  | "migration_review";
+
+export interface LocalProfile {
+  id: string;
+  displayName: string;
+  enabled: boolean;
+  agent: "claude" | "codex";
+  activeStoreId: string | null;
+  automation: AutomationSettings;
+}
+
+export interface AccountStore {
+  id: string;
+  profileId: string;
+  codexHome: string;
+  identityKey: string | null;
+  bindingState: AccountStoreBindingState;
+  lastKnownEmail?: string | null;
+  planType?: string | null;
+  automation: AutomationSettings;
+}
+
 export type AccountAuthState = "connected" | "wrong_auth" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
 
 export interface AccountAuthStatus {
