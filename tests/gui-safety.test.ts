@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
+import { filterLogTextToWindow, LOG_RETENTION_MS } from "../src/core/log.js";
 import { redactSecrets } from "../src/core/redact.js";
 import { acquireExecutionLock, clearLease, executionLockPath, leaseIsLive, STALE_LOCK_GRACE_MS, writeLease } from "../src/gui/lease.js";
 import { defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { reliablePing } from "../src/gui/reliable-ping.js";
 import { GUI_TASK_PREFIX, schedulerExecutable, WindowsScheduler } from "../src/gui/scheduler.js";
-import { buildPingEnvironment, headlessArgv } from "../src/agents/ping.js";
+import { buildPingEnvironment, headlessArgv, pingDiagnosticTail } from "../src/agents/ping.js";
 import { accountPingEnvironment, accountPingUnsetEnvironment, elapsedMinutesForSchedule, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
 import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/gui/power-state.js";
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
@@ -267,6 +268,42 @@ describe("Windows GUI scheduler", () => {
     writeFileSync(receipt, "{not-json", "utf8");
     assert.throws(() => scheduler.diagnosticReceiptTasks());
     assert.equal(externalCalls, 0);
+  });
+});
+
+describe("log retention and ping diagnostics", () => {
+  it("keeps only timestamped entries from the most recent 24 hours", () => {
+    const now = new Date(2026, 9, 3, 23, 19, 0).getTime();
+    const text = [
+      "[2026-10-02 23:18:59] expired",
+      "[2026-10-02 23:19:00] boundary",
+      "[2026-10-03 12:00:00] recent",
+      "[2026-10-03 23:19:00] newest",
+      "unstructured legacy text",
+    ].join("\n");
+    const filtered = filterLogTextToWindow(text, now, LOG_RETENTION_MS);
+    assert.doesNotMatch(filtered, /expired|unstructured/);
+    assert.match(filtered, /boundary/);
+    assert.match(filtered, /recent/);
+    assert.match(filtered, /newest/);
+  });
+
+  it("redacts and bounds stderr diagnostics before they reach the log", () => {
+    const raw = "\u001b[31mAuthorization: Bearer secret-token-value\u001b[0m\n"
+      + "OPENAI_API_KEY=sk-abcdefghijk\n"
+      + "codex: account authentication failed\n"
+      + "x".repeat(10_000);
+    const diagnostic = pingDiagnosticTail(raw, 1024);
+    assert.doesNotMatch(diagnostic, /secret-token-value|sk-abcdefghijk/);
+    assert.match(diagnostic, /REDACTED/);
+    assert.doesNotMatch(diagnostic, /\u001b|\r|\n/);
+    assert.ok(diagnostic.length <= 1025);
+  });
+
+  it("reads the GUI log through the 24-hour recent-log helper instead of a byte slice", () => {
+    const service = readFileSync(join(process.cwd(), "src", "gui", "service.ts"), "utf8");
+    assert.match(service, /readRecentLog\(configmod\.logPath\(\)\)/);
+    assert.doesNotMatch(service, /text\.slice\(-200_000\)/);
   });
 });
 
