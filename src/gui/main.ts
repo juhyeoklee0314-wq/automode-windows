@@ -9,7 +9,7 @@ import { clearLease, writeLease } from "./lease.js";
 import { exportDiagnosticSnapshot } from "./diagnostic-export.js";
 import { DIAGNOSTIC_CHANNEL } from "./channels.js";
 import { BUILD_IDENTITY, DIAGNOSTIC_LOG_PATH, DIAGNOSTIC_RECEIPT_PATH, DiagnosticTrace } from "./diagnostics.js";
-import { loadDiagnosticPreferences, loadPreferences, savePreferences } from "./preferences.js";
+import { activeTaskResumeSchedules, loadDiagnosticPreferences, loadPreferences, savePreferences } from "./preferences.js";
 import { requestWindowsSleep } from "./power-control.js";
 import { recordResume, recordSuspend } from "./power-state.js";
 import { resolveProcessMode } from "./routing.js";
@@ -247,7 +247,7 @@ function startGui(): void {
       });
     }
     try {
-      taskResumeScheduler.sync(preferences.taskResumeSchedules);
+      taskResumeScheduler.sync(activeTaskResumeSchedules(preferences));
     } catch {
       trace.emit("TASK_RESUME_SCHEDULER_SYNC_FAILED", "main");
     }
