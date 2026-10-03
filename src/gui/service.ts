@@ -8,6 +8,7 @@ import * as configmod from "../core/config.js";
 import { redactSecrets } from "../core/redact.js";
 import { nextOccurrence, parseHhmm, resolveTz } from "../core/timeutil.js";
 import { codexAuthStatus, startCodexLogin } from "./account-auth.js";
+import { ensureActiveAccountStore } from "./account-store-runtime.js";
 import { discoverCodexTasks } from "./codex-task-discovery.js";
 import { readAccountRateLimitStatus, resumeCodexTask } from "./codex-task-runtime.js";
 import { leaseIsLive, writeLease } from "./lease.js";
@@ -128,16 +129,15 @@ export class GuiService {
   }
 
   async resumeTask(accountId: string, threadId: string, expectedUpdatedAt: number | null): Promise<TaskResumeResult> {
-    const preferences = loadPreferences(configmod.load());
-    const account = preferences.accounts.find((entry) =>
-      entry.id === accountId && entry.enabled && entry.agent === "codex" && Boolean(entry.codexHome));
-    if (!account) {
+    const verified = await ensureActiveAccountStore(accountId);
+    const account = verified.state === "ready" ? verified.account : null;
+    if (!account || !account.enabled) {
       return {
         accountId,
         threadId,
         action: "abort",
         status: "rejected",
-        detail: "The selected Codex account profile is unavailable or disabled.",
+        detail: verified.detail || "The selected Codex account profile is unavailable or disabled.",
         turnId: null,
       };
     }
@@ -145,10 +145,9 @@ export class GuiService {
   }
 
   async getAccountRateLimitStatus(accountId: string): Promise<AccountRateLimitStatus> {
-    const preferences = loadPreferences(configmod.load());
-    const account = preferences.accounts.find((entry) =>
-      entry.id === accountId && entry.enabled && entry.agent === "codex" && Boolean(entry.codexHome));
-    if (!account) throw new Error("The selected Codex account profile is unavailable or disabled.");
+    const verified = await ensureActiveAccountStore(accountId);
+    const account = verified.state === "ready" ? verified.account : null;
+    if (!account || !account.enabled) throw new Error(verified.detail || "The selected Codex account profile is unavailable or disabled.");
     return await readAccountRateLimitStatus(account);
   }
 
@@ -161,9 +160,9 @@ export class GuiService {
   ): Promise<AppSnapshot> {
     const config = configmod.load();
     const preferences = loadPreferences(config);
-    const account = preferences.accounts.find((entry) =>
-      entry.id === accountId && entry.enabled && entry.agent === "codex" && Boolean(entry.codexHome));
-    if (!account) throw new Error("The selected Codex account profile is unavailable or disabled.");
+    const verified = await ensureActiveAccountStore(accountId);
+    const account = verified.state === "ready" ? verified.account : null;
+    if (!account || !account.enabled) throw new Error(verified.detail || "The selected Codex account profile is unavailable or disabled.");
 
     const when = new Date(runAt);
     const now = Date.now();
@@ -217,7 +216,26 @@ export class GuiService {
     const config = configmod.load();
     const account = loadPreferences(config).accounts.find((entry) => entry.id === accountId);
     if (!account) return missingProfileStatus(accountId);
-    return await codexAuthStatus(account);
+
+    const status = await codexAuthStatus(account);
+    if (status.state !== "connected") return status;
+    if (status.identityVerified !== true) {
+      return {
+        ...status,
+        state: "account_unverified",
+        detail: "ChatGPT login is active, but PingGPT could not verify the provider account identity.",
+      };
+    }
+
+    const verified = await ensureActiveAccountStore(accountId);
+    if (verified.state === "ready") return status;
+    if (verified.state === "account_mismatch") {
+      return { ...status, state: "account_mismatch", detail: verified.detail };
+    }
+    if (verified.state === "migration_review") {
+      return { ...status, state: "migration_review", detail: verified.detail };
+    }
+    return { ...status, state: "account_unverified", detail: verified.detail };
   }
 
   async connectAccount(accountId: string): Promise<AccountAuthStatus> {
