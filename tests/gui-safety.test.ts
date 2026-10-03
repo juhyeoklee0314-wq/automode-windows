@@ -357,8 +357,11 @@ describe("reliability safeguards", () => {
     assert.equal(existsSync(statePath), false);
   });
 
-  it("keeps headless Codex pings ephemeral so they do not pollute task history", () => {
-    assert.deepEqual(headlessArgv("codex", "hi"), ["codex", "exec", "--ephemeral", "hi"]);
+  it("keeps headless Codex pings ephemeral and allows them outside a Git repository", () => {
+    assert.deepEqual(
+      headlessArgv("codex", "hi"),
+      ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "hi"],
+    );
   });
 
   it("applies CODEX_HOME only to an explicitly configured Codex account", () => {
