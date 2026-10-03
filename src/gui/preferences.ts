@@ -127,16 +127,33 @@ export function newAccountProfile(config: Config, existing: AccountProfile[]): A
   };
 }
 
-function projectTaskResumeSchedules(raw: { taskResumeSchedules?: unknown }, accountIds: Set<string>): TaskResumeSchedule[] {
+function projectTaskResumeSchedules(
+  raw: { taskResumeSchedules?: unknown },
+  profiles: LocalProfile[],
+  stores: AccountStore[],
+): TaskResumeSchedule[] {
   if (!Array.isArray(raw.taskResumeSchedules)) return [];
   const seen = new Set<string>();
   const projected: TaskResumeSchedule[] = [];
-  for (const entry of raw.taskResumeSchedules as Array<Partial<TaskResumeSchedule>>) {
+  const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+  const storeById = new Map(stores.map((store) => [store.id, store]));
+
+  for (const entry of raw.taskResumeSchedules as Array<Partial<TaskResumeSchedule> & { storeId?: unknown }>) {
     const id = String(entry?.id ?? "").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 64);
     const accountId = String(entry?.accountId ?? "");
+    const profile = profileById.get(accountId);
     const threadId = String(entry?.threadId ?? "");
     const runAt = String(entry?.runAt ?? "");
-    if (!id || seen.has(id) || !accountIds.has(accountId)) continue;
+    if (!id || seen.has(id) || !profile) continue;
+
+    let storeId = String(entry?.storeId ?? "");
+    const explicitStore = storeById.get(storeId);
+    if (!explicitStore || explicitStore.profileId !== accountId) {
+      storeId = profile.activeStoreId ?? "";
+    }
+    const store = storeById.get(storeId);
+    if (!store || store.profileId !== accountId) continue;
+
     if (!/^[0-9A-Fa-f-]{36}$/.test(threadId)) continue;
     const when = new Date(runAt);
     if (!Number.isFinite(when.getTime())) continue;
@@ -144,6 +161,7 @@ function projectTaskResumeSchedules(raw: { taskResumeSchedules?: unknown }, acco
     projected.push({
       id,
       accountId,
+      storeId,
       threadId,
       title: String(entry?.title ?? "Codex task").slice(0, 240),
       runAt: when.toISOString(),
@@ -158,6 +176,16 @@ function projectTaskResumeSchedules(raw: { taskResumeSchedules?: unknown }, acco
     });
   }
   return projected;
+}
+
+export function activeTaskResumeSchedules(preferences: GuiPreferences): TaskResumeSchedule[] {
+  const activeStoreByProfile = new Map(
+    preferences.accounts
+      .filter((account) => account.enabled && account.agent === "codex" && Boolean(account.storeId))
+      .map((account) => [account.id, account.storeId!]),
+  );
+  return preferences.taskResumeSchedules.filter((schedule) =>
+    schedule.enabled && activeStoreByProfile.get(schedule.accountId) === schedule.storeId);
 }
 
 function projectLegacyAccounts(raw: { accounts?: unknown }, config: Config): AccountProfile[] {
@@ -188,13 +216,12 @@ function projectLegacyAccounts(raw: { accounts?: unknown }, config: Config): Acc
 function projectV1(raw: Record<string, unknown>, config: Config): GuiPreferences {
   const accounts = projectLegacyAccounts(raw, config);
   const migrated = migrateV1AccountProfiles(accounts);
-  const accountIds = new Set(migrated.profiles.map((profile) => profile.id));
   return runtimePreferences(
     Boolean(raw.runAtLogin),
     Boolean(raw.schedulerEnabled),
     migrated.profiles,
     migrated.accountStores,
-    projectTaskResumeSchedules(raw, accountIds),
+    projectTaskResumeSchedules(raw, migrated.profiles, migrated.accountStores),
   );
 }
 
@@ -252,13 +279,12 @@ function projectV2(raw: Record<string, unknown>, config: Config): GuiPreferences
     if (profile.agent !== "codex" || !store) profile.activeStoreId = null;
   }
 
-  const accountIds = new Set(profiles.map((profile) => profile.id));
   return runtimePreferences(
     Boolean(raw.runAtLogin),
     Boolean(raw.schedulerEnabled),
     profiles,
     accountStores,
-    projectTaskResumeSchedules(raw, accountIds),
+    projectTaskResumeSchedules(raw, profiles, accountStores),
   );
 }
 
