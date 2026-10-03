@@ -241,6 +241,11 @@ export interface AutomodeApi {
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;
   newAccountProfile(): Promise<AccountProfile>;
+  getAccountStores(profileId: string): Promise<AccountStoreSummary[]>;
+  createAccountStore(profileId: string): Promise<AccountStoreSummary>;
+  getAccountStoreAuthStatus(profileId: string, storeId: string): Promise<AccountAuthStatus>;
+  connectAccountStore(profileId: string, storeId: string): Promise<AccountAuthStatus>;
+  activateAccountStore(profileId: string, storeId: string): Promise<AppSnapshot>;
   getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus>;
   connectAccount(accountId: string): Promise<AccountAuthStatus>;
   openExternalLogin(url: string, code: string): Promise<boolean>;
