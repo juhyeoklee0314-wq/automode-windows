@@ -481,9 +481,9 @@ function profileCard(profileId) {
 }
 
 function storeDisplayLabel(store) {
+  if (store.bindingState === "migration_review") return "Legacy R1.06 data";
+  if (store.bindingState === "migration_pending") return "Existing R1.06 data";
   if (store.email) return store.email;
-  if (store.bindingState === "migration_review") return "Existing account data";
-  if (store.bindingState === "migration_pending") return "Existing account";
   if (store.bindingState === "pending") return "New account setup";
   return "Stored ChatGPT account";
 }
@@ -491,6 +491,8 @@ function storeDisplayLabel(store) {
 function storeMetaLabel(store) {
   const parts = [];
   if (store.active) parts.push("Current");
+  if (store.bindingState === "migration_review") parts.push("Legacy R1.06 store");
+  else if (store.bindingState === "migration_pending") parts.push("Existing R1.06 store");
   const plan = formatPlanType(store.planType);
   if (plan) parts.push(plan);
   if (store.bindingState === "migration_review") parts.push("Migration review required");
@@ -513,7 +515,7 @@ async function renderAccountStoreManager(card) {
   const title = document.createElement("strong");
   title.textContent = "Manage account";
   const note = document.createElement("small");
-  note.textContent = "Only the current account is shown outside this panel.";
+  note.textContent = "Each connection uses a separate store. You may sign in with the same ChatGPT account or a different one.";
   copy.append(title, note);
   const close = document.createElement("button");
   close.className = "secondary small";
@@ -581,7 +583,7 @@ async function renderAccountStoreManager(card) {
   footer.className = "account-store-footer";
   const add = document.createElement("button");
   add.className = "secondary small";
-  add.textContent = "+ Add another account";
+  add.textContent = "+ Connect account";
   add.onclick = async () => {
     add.disabled = true;
     try {
