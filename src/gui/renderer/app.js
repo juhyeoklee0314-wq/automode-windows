@@ -626,9 +626,11 @@ function taskMatchesSearch(item) {
 
 function activeTaskSchedule(item) {
   if (!item?.accountId) return null;
+  const account = (snapshot?.preferences?.accounts || []).find((entry) => entry.id === item.accountId);
   return (snapshot?.preferences?.taskResumeSchedules || []).find((schedule) =>
     schedule.enabled
     && schedule.accountId === item.accountId
+    && schedule.storeId === account?.storeId
     && schedule.threadId === item.id
   ) || null;
 }
@@ -676,7 +678,13 @@ function renderTaskResumeSchedules(schedules) {
   if (!root) return;
   root.replaceChildren();
 
+  const activeStoreByProfile = new Map(
+    (snapshot?.preferences?.accounts || [])
+      .filter((account) => account.agent === 'codex' && account.enabled !== false && account.storeId)
+      .map((account) => [account.id, account.storeId])
+  );
   const filtered = (schedules || []).filter((schedule) => {
+    if (activeStoreByProfile.get(schedule.accountId) !== schedule.storeId) return false;
     if (taskAccountFilter === 'legacy') return false;
     if (taskAccountFilter === 'all') return true;
     return schedule.accountId === taskAccountFilter;
