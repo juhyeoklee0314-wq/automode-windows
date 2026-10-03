@@ -22,7 +22,23 @@ export interface ActiveStoreRuntimeCheck {
   existingStoreId?: string | null;
 }
 
-export async function verifyAccountStore(profileId: string, storeId: string): Promise<ActiveStoreRuntimeCheck> {
+let verificationTail: Promise<void> = Promise.resolve();
+
+async function withVerificationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = verificationTail;
+  let release!: () => void;
+  verificationTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+async function verifyAccountStoreUnlocked(profileId: string, storeId: string): Promise<ActiveStoreRuntimeCheck> {
   const config = configmod.load();
   const preferences = loadPreferences(config);
   const profile = preferences.profiles.find((entry) => entry.id === profileId);
@@ -157,6 +173,10 @@ export async function verifyAccountStore(profileId: string, storeId: string): Pr
     },
     detail: "Account store verified and bound.",
   };
+}
+
+export async function verifyAccountStore(profileId: string, storeId: string): Promise<ActiveStoreRuntimeCheck> {
+  return await withVerificationLock(() => verifyAccountStoreUnlocked(profileId, storeId));
 }
 
 export async function ensureActiveAccountStore(profileId: string): Promise<ActiveStoreRuntimeCheck> {
