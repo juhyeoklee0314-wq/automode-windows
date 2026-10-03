@@ -10,7 +10,7 @@ export const GUI_TASK_PREFIX = "Automode GUI Ping";
 const receiptPath = (): string => join(stateDir(), "gui-schedule.json");
 
 interface Receipt { tasks: SchedulerTaskStatus[] }
-interface DesiredTask extends SchedulerTaskStatus { accountId: string; wakePc: boolean }
+interface DesiredTask extends SchedulerTaskStatus { accountId: string; storeId: string | null; wakePc: boolean }
 export type TaskCommand = (args: string[]) => { ok: boolean; output: string };
 
 function powershellTaskSettings(taskName: string, wakePc: boolean): { ok: boolean; output: string } {
@@ -89,6 +89,7 @@ function desiredTasks(accounts: AccountProfile[]): DesiredTask[] {
       const scheduleId = `${time.replace(":", "")}-${index}`;
       desired.push({
         accountId: account.id,
+        storeId: account.agent === "codex" ? (account.storeId ?? null) : null,
         wakePc: account.wakePc === true,
         name: taskName(account.id, scheduleId),
         scheduleId,
@@ -114,9 +115,9 @@ export function schedulerExecutable(execPath: string, portableFile = process.env
   return portableFile?.trim() || execPath;
 }
 
-function windowsAction(executable: string, accountId: string, scheduleId: string): string {
+function windowsAction(executable: string, accountId: string, storeId: string | null, scheduleId: string): string {
   const quote = (value: string): string => `"${value.replace(/"/g, '""')}"`;
-  return [executable, "--scheduled-runner", accountId, scheduleId].map(quote).join(" ");
+  return [executable, "--scheduled-runner", accountId, storeId ?? "-", scheduleId].map(quote).join(" ");
 }
 
 export class WindowsScheduler {
@@ -150,7 +151,7 @@ export class WindowsScheduler {
     for (const task of desired) {
       const result = this.runTask([
         "/Create", "/F", "/SC", "DAILY", "/ST", task.time, "/TN", task.name,
-        "/TR", windowsAction(this.executable, task.accountId, task.scheduleId), "/IT",
+        "/TR", windowsAction(this.executable, task.accountId, task.storeId, task.scheduleId), "/IT",
       ]);
       if (!result.ok) {
         writeReceipt(tracked, this.receiptFile);
