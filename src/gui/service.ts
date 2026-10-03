@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import * as detect from "../agents/detect.js";
 import * as dialogs from "../agents/dialogs.js";
@@ -8,14 +9,22 @@ import * as configmod from "../core/config.js";
 import { redactSecrets } from "../core/redact.js";
 import { nextOccurrence, parseHhmm, resolveTz } from "../core/timeutil.js";
 import { codexAuthStatus, startCodexLogin } from "./account-auth.js";
-import { ensureActiveAccountStore } from "./account-store-runtime.js";
+import { ensureActiveAccountStore, verifyAccountStore } from "./account-store-runtime.js";
+import { newAccountStoreId, projectAccountProfileForStore } from "./account-store-model.js";
 import { discoverCodexTasks } from "./codex-task-discovery.js";
 import { readAccountRateLimitStatus, resumeCodexTask } from "./codex-task-runtime.js";
 import { leaseIsLive, writeLease } from "./lease.js";
-import { activeTaskResumeSchedules, loadPreferences, newAccountProfile as createAccountProfile, savePreferences } from "./preferences.js";
+import {
+  activeTaskResumeSchedules,
+  codexProfilesRoot,
+  loadPreferences,
+  newAccountProfile as createAccountProfile,
+  saveCanonicalPreferences,
+  savePreferences,
+} from "./preferences.js";
 import { WindowsScheduler } from "./scheduler.js";
 import { TaskResumeScheduler } from "./task-resume-scheduler.js";
-import type { AccountAuthStatus, AccountProfile, AccountRateLimitStatus, AppSnapshot, DoctorCheck, GuiPreferences, SavePayload, TaskInventorySnapshot, TaskResumeResult } from "./types.js";
+import type { AccountAuthStatus, AccountProfile, AccountRateLimitStatus, AccountStoreSummary, AppSnapshot, DoctorCheck, GuiPreferences, SavePayload, TaskInventorySnapshot, TaskResumeResult } from "./types.js";
 import { BUILD_IDENTITY } from "./diagnostics.js";
 import type { DiagnosticTrace } from "./diagnostics.js";
 
@@ -34,6 +43,27 @@ function nextPing(preferences: GuiPreferences, config: configmod.Config): string
 
 function missingProfileStatus(accountId: string): AccountAuthStatus {
   return { accountId, state: "profile_missing", detail: "Account profile was not found. Save changes and try again." };
+}
+
+function accountStoreSummary(preferences: GuiPreferences, profileId: string, storeId: string): AccountStoreSummary | null {
+  const profile = preferences.profiles.find((entry) => entry.id === profileId);
+  const store = preferences.accountStores.find((entry) => entry.id === storeId && entry.profileId === profileId);
+  if (!profile || !store) return null;
+  return {
+    profileId,
+    storeId,
+    active: profile.activeStoreId === storeId,
+    bindingState: store.bindingState,
+    email: store.lastKnownEmail ?? null,
+    planType: store.planType ?? null,
+  };
+}
+
+function accountForStore(preferences: GuiPreferences, profileId: string, storeId: string): AccountProfile | null {
+  const profile = preferences.profiles.find((entry) => entry.id === profileId);
+  const store = preferences.accountStores.find((entry) => entry.id === storeId && entry.profileId === profileId);
+  if (!profile || !store || profile.agent !== "codex") return null;
+  return projectAccountProfileForStore(profile, store);
 }
 
 export class GuiService {
@@ -213,6 +243,144 @@ export class GuiService {
     return this.snapshot();
   }
 
+  getAccountStores(profileId: string): AccountStoreSummary[] {
+    const preferences = loadPreferences(configmod.load());
+    return preferences.accountStores
+      .filter((store) => store.profileId === profileId)
+      .map((store) => accountStoreSummary(preferences, profileId, store.id))
+      .filter((entry): entry is AccountStoreSummary => entry !== null)
+      .sort((a, b) => Number(b.active) - Number(a.active)
+        || String(a.email ?? a.storeId).localeCompare(String(b.email ?? b.storeId)));
+  }
+
+  createAccountStore(profileId: string): AccountStoreSummary {
+    const preferences = loadPreferences(configmod.load());
+    const profile = preferences.profiles.find((entry) => entry.id === profileId && entry.agent === "codex");
+    if (!profile) throw new Error("The selected Codex profile was not found.");
+
+    const reusablePending = preferences.accountStores.find((store) =>
+      store.profileId === profileId
+      && store.id !== profile.activeStoreId
+      && store.bindingState === "pending"
+      && !store.identityKey);
+    if (reusablePending) {
+      const summary = accountStoreSummary(preferences, profileId, reusablePending.id);
+      if (!summary) throw new Error("Pending account store could not be projected.");
+      return summary;
+    }
+
+    const activeAccount = preferences.accounts.find((entry) => entry.id === profileId);
+    const storeId = newAccountStoreId(profileId);
+    const automation = activeAccount
+      ? {
+          message: activeAccount.message,
+          schedules: [...activeAccount.schedules],
+          catchupMinutes: activeAccount.catchupMinutes,
+          wakePc: activeAccount.wakePc,
+        }
+      : {
+          message: profile.automation.message,
+          schedules: [...profile.automation.schedules],
+          catchupMinutes: profile.automation.catchupMinutes,
+          wakePc: profile.automation.wakePc,
+        };
+
+    preferences.accountStores.push({
+      id: storeId,
+      profileId,
+      codexHome: join(codexProfilesRoot(), profileId, storeId),
+      identityKey: null,
+      bindingState: "pending",
+      automation,
+    });
+    saveCanonicalPreferences(preferences);
+
+    const fresh = loadPreferences(configmod.load());
+    const summary = accountStoreSummary(fresh, profileId, storeId);
+    if (!summary) throw new Error("New account store could not be created.");
+    return summary;
+  }
+
+  async getAccountStoreAuthStatus(profileId: string, storeId: string): Promise<AccountAuthStatus> {
+    const preferences = loadPreferences(configmod.load());
+    const account = accountForStore(preferences, profileId, storeId);
+    if (!account) return { ...missingProfileStatus(profileId), storeId };
+
+    const status = await codexAuthStatus(account);
+    const base = { ...status, accountId: profileId, storeId };
+    if (status.state !== "connected") return base;
+    if (status.identityVerified !== true) {
+      return {
+        ...base,
+        state: "account_unverified",
+        detail: "ChatGPT login is active, but PingGPT could not verify the provider account identity.",
+      };
+    }
+
+    const verified = await verifyAccountStore(profileId, storeId);
+    if (verified.state === "ready") return base;
+    if (verified.state === "account_already_stored") {
+      return {
+        ...base,
+        state: "account_already_stored",
+        existingStoreId: verified.existingStoreId ?? null,
+        detail: verified.detail,
+      };
+    }
+    if (verified.state === "account_mismatch") {
+      return { ...base, state: "account_mismatch", detail: verified.detail };
+    }
+    if (verified.state === "migration_review") {
+      return { ...base, state: "migration_review", detail: verified.detail };
+    }
+    return { ...base, state: "account_unverified", detail: verified.detail };
+  }
+
+  async connectAccountStore(profileId: string, storeId: string): Promise<AccountAuthStatus> {
+    const preferences = loadPreferences(configmod.load());
+    const account = accountForStore(preferences, profileId, storeId);
+    if (!account) return { ...missingProfileStatus(profileId), storeId };
+    const result = await startCodexLogin(account);
+    this.trace?.emit("ACCOUNT_STORE_LOGIN_REQUESTED", "main", { profileId, storeId, state: result.state });
+    return { ...result, accountId: profileId, storeId };
+  }
+
+  async activateAccountStore(profileId: string, storeId: string): Promise<AppSnapshot> {
+    const verified = await verifyAccountStore(profileId, storeId);
+    if (verified.state !== "ready") throw new Error(verified.detail);
+
+    const preferences = loadPreferences(configmod.load());
+    const profile = preferences.profiles.find((entry) => entry.id === profileId);
+    const store = preferences.accountStores.find((entry) => entry.id === storeId && entry.profileId === profileId);
+    if (!profile || !store) throw new Error("The selected account store is no longer available.");
+
+    const now = new Date();
+    if (profile.activeStoreId !== storeId) {
+      for (const schedule of preferences.taskResumeSchedules) {
+        if (!schedule.enabled || schedule.accountId !== profileId || schedule.storeId !== storeId) continue;
+        const due = new Date(schedule.runAt).getTime();
+        if (Number.isFinite(due) && due < now.getTime()) {
+          schedule.enabled = false;
+          schedule.completedAt = now.toISOString();
+          schedule.lastStatus = "rejected";
+        }
+      }
+      profile.activeStoreId = storeId;
+      saveCanonicalPreferences(preferences);
+    }
+
+    const fresh = loadPreferences(configmod.load());
+    this.taskResumeScheduler.sync(activeTaskResumeSchedules(fresh));
+    if (fresh.schedulerEnabled) {
+      this.scheduler.install(fresh.accounts);
+      writeLease(true);
+    } else {
+      this.scheduler.prune(fresh.accounts);
+    }
+    this.trace?.emit("ACCOUNT_STORE_ACTIVATED", "main", { profileId, storeId });
+    return this.snapshot();
+  }
+
   async getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus> {
     const config = configmod.load();
     const account = loadPreferences(config).accounts.find((entry) => entry.id === accountId);
@@ -240,12 +408,10 @@ export class GuiService {
   }
 
   async connectAccount(accountId: string): Promise<AccountAuthStatus> {
-    const config = configmod.load();
-    const account = loadPreferences(config).accounts.find((entry) => entry.id === accountId);
-    if (!account) return missingProfileStatus(accountId);
-    const result = await startCodexLogin(account);
-    this.trace?.emit("ACCOUNT_LOGIN_REQUESTED", "main", { accountId, state: result.state });
-    return result;
+    const preferences = loadPreferences(configmod.load());
+    const profile = preferences.profiles.find((entry) => entry.id === accountId);
+    if (!profile?.activeStoreId) return missingProfileStatus(accountId);
+    return await this.connectAccountStore(accountId, profile.activeStoreId);
   }
 
   doctor(): DoctorCheck[] {
