@@ -375,20 +375,36 @@ function reconcileRuntimeAccounts(preferences: GuiPreferences): { profiles: Loca
   return { profiles: nextProfiles, stores };
 }
 
-export function savePreferences(preferences: GuiPreferences): string {
+function writeCanonicalPreferences(preferences: Pick<GuiPreferences,
+  "runAtLogin" | "schedulerEnabled" | "profiles" | "accountStores" | "taskResumeSchedules"
+>): string {
   const path = preferencesPath();
   mkdirSync(stateDir(), { recursive: true });
-  const reconciled = reconcileRuntimeAccounts(preferences);
   const persisted: PersistedGuiPreferencesV2 = {
     schemaVersion: 2,
     runAtLogin: Boolean(preferences.runAtLogin),
     schedulerEnabled: Boolean(preferences.schedulerEnabled),
-    profiles: reconciled.profiles,
-    accountStores: reconciled.stores,
+    profiles: preferences.profiles,
+    accountStores: preferences.accountStores,
     taskResumeSchedules: preferences.taskResumeSchedules,
   };
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(persisted, null, 2), "utf8");
   renameSync(tmp, path);
   return path;
+}
+
+export function saveCanonicalPreferences(preferences: GuiPreferences): string {
+  return writeCanonicalPreferences(preferences);
+}
+
+export function savePreferences(preferences: GuiPreferences): string {
+  const reconciled = reconcileRuntimeAccounts(preferences);
+  return writeCanonicalPreferences({
+    runAtLogin: preferences.runAtLogin,
+    schedulerEnabled: preferences.schedulerEnabled,
+    profiles: reconciled.profiles,
+    accountStores: reconciled.stores,
+    taskResumeSchedules: preferences.taskResumeSchedules,
+  });
 }
