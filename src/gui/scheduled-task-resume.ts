@@ -88,6 +88,11 @@ export async function runScheduledTaskResume(
 
   const verified = await ensureActiveAccountStore(schedule.accountId);
   const account = verified.state === "ready" ? verified.account : null;
+  if (account && account.storeId !== schedule.storeId) {
+    log(`scheduled task resume deferred: store ${schedule.storeId} is not active for profile ${schedule.accountId}`);
+    await maybeReturnToSleep(wokeForResume, idleBaseline, idleBaselineAt, runtime);
+    return { code: 75, result: null };
+  }
   if (!account || !account.enabled || account.agent !== "codex") {
     schedule.enabled = false;
     schedule.completedAt = now.toISOString();
