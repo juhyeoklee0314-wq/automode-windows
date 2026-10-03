@@ -97,6 +97,9 @@ export function projectActiveAccountProfiles(
       agent: profile.agent,
       catchupMinutes: automation.catchupMinutes,
       wakePc: automation.wakePc,
+      storeId: store?.id ?? null,
+      storeIdentityKey: store?.identityKey ?? null,
+      storeBindingState: store?.bindingState ?? null,
     };
   });
 }
