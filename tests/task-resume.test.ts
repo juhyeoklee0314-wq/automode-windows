@@ -133,7 +133,7 @@ describe("task resume wiring safety", () => {
   it("prunes resume schedules that no longer have an enabled Codex account", () => {
     const service = source("src/gui/service.ts");
     assert.match(service, /resumableAccounts/);
-    assert.match(service, /taskResumeSchedules = payload\.preferences\.taskResumeSchedules/);
+    assert.match(service, /canonicalPreferences\.taskResumeSchedules = canonicalPreferences\.taskResumeSchedules/);
     assert.match(service, /filter\(\(schedule\) => resumableAccounts\.has\(schedule\.accountId\)\)/);
   });
 
