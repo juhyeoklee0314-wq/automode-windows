@@ -32,9 +32,16 @@ function nextPing(preferences: GuiPreferences, config: configmod.Config): string
   if (!preferences.schedulerEnabled) return null;
   const tz = resolveTz(config.timezone || null);
   const now = new Date();
-  const candidates = preferences.accounts.flatMap((account) => account.enabled
-    ? account.schedules.map((entry) => parseHhmm(entry)).filter((entry): entry is [number, number] => entry !== null)
-    : []);
+  const candidates = preferences.accounts.flatMap((account) => {
+    const schedulable = account.enabled && (account.agent !== "codex" || (
+      Boolean(account.codexHome)
+      && account.storeBindingState !== "pending"
+      && account.storeBindingState !== "migration_review"
+    ));
+    return schedulable
+      ? account.schedules.map((entry) => parseHhmm(entry)).filter((entry): entry is [number, number] => entry !== null)
+      : [];
+  });
   if (!candidates.length) return null;
   return candidates
     .map(([hour, minute]) => nextOccurrence(now, hour, minute, tz))
