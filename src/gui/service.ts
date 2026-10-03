@@ -357,8 +357,12 @@ export class GuiService {
     const store = preferences.accountStores.find((entry) => entry.id === storeId && entry.profileId === profileId);
     if (!profile || !store) throw new Error("The selected account store is no longer available.");
 
+    const previousActiveStoreId = profile.activeStoreId;
+    const previousTaskResumeSchedules = preferences.taskResumeSchedules.map((schedule) => ({ ...schedule }));
+    const switching = previousActiveStoreId !== storeId;
     const now = new Date();
-    if (profile.activeStoreId !== storeId) {
+
+    if (switching) {
       for (const schedule of preferences.taskResumeSchedules) {
         if (!schedule.enabled || schedule.accountId !== profileId || schedule.storeId !== storeId) continue;
         const due = new Date(schedule.runAt).getTime();
@@ -372,14 +376,49 @@ export class GuiService {
       saveCanonicalPreferences(preferences);
     }
 
-    const fresh = loadPreferences(configmod.load());
-    this.taskResumeScheduler.sync(activeTaskResumeSchedules(fresh));
-    if (fresh.schedulerEnabled) {
-      this.scheduler.install(fresh.accounts);
-      writeLease(true);
-    } else {
-      this.scheduler.prune(fresh.accounts);
+    try {
+      const fresh = loadPreferences(configmod.load());
+      this.taskResumeScheduler.sync(activeTaskResumeSchedules(fresh));
+      if (fresh.schedulerEnabled) {
+        this.scheduler.install(fresh.accounts);
+        writeLease(true);
+      } else {
+        this.scheduler.prune(fresh.accounts);
+      }
+    } catch (error) {
+      if (switching) {
+        const rollback = loadPreferences(configmod.load());
+        const rollbackProfile = rollback.profiles.find((entry) => entry.id === profileId);
+        if (rollbackProfile) rollbackProfile.activeStoreId = previousActiveStoreId;
+        rollback.taskResumeSchedules = previousTaskResumeSchedules;
+        saveCanonicalPreferences(rollback);
+
+        const restored = loadPreferences(configmod.load());
+        let rollbackError: unknown = null;
+        try {
+          this.taskResumeScheduler.sync(activeTaskResumeSchedules(restored));
+          if (restored.schedulerEnabled) {
+            this.scheduler.install(restored.accounts);
+            writeLease(true);
+          } else {
+            this.scheduler.prune(restored.accounts);
+          }
+        } catch (reconcileError) {
+          rollbackError = reconcileError;
+        }
+        this.trace?.emit("ACCOUNT_STORE_ACTIVATION_ROLLED_BACK", "main", {
+          profileId,
+          attemptedStoreId: storeId,
+          restoredStoreId: previousActiveStoreId,
+          schedulerRollbackOk: rollbackError === null,
+        });
+        if (rollbackError) {
+          throw new Error(`Account switch failed and the previous binding was restored, but scheduler rollback also failed: ${String((rollbackError as { message?: unknown })?.message ?? rollbackError)}`);
+        }
+      }
+      throw error;
     }
+
     this.trace?.emit("ACCOUNT_STORE_ACTIVATED", "main", { profileId, storeId });
     return this.snapshot();
   }
