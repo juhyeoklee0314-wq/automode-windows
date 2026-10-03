@@ -141,6 +141,7 @@ export async function runScheduled(
   now = new Date(),
   trace?: DiagnosticTrace,
   runtime: ScheduledRuntime = {},
+  expectedStoreId?: string | null,
 ): Promise<number> {
   const log = createLogger();
   trace?.emit("PING_01_RUNNER_ENTER", "scheduled", { accountId, scheduleId });
@@ -153,6 +154,16 @@ export async function runScheduled(
   if (!account) return 64;
 
   if (account.agent === "codex") {
+    if (expectedStoreId !== undefined
+      && (!expectedStoreId || expectedStoreId === "-" || account.storeId !== expectedStoreId)) {
+      trace?.emit("PING_ACCOUNT_STORE_STALE_TASK_REJECTED", "scheduled", {
+        accountId,
+        expectedStoreId,
+        activeStoreId: account.storeId ?? null,
+      });
+      log("scheduled ping refused: Windows task account store does not match the active profile store");
+      return 75;
+    }
     const verified = await ensureActiveAccountStore(accountId);
     if (verified.state !== "ready" || !verified.account) {
       trace?.emit("PING_ACCOUNT_STORE_REJECTED", "scheduled", { accountId, state: verified.state });
@@ -264,6 +275,7 @@ export async function runScheduledDryRun(
   scheduleId: string,
   now = new Date(),
   trace?: DiagnosticTrace,
+  expectedStoreId?: string | null,
 ): Promise<number> {
   trace?.emit("PING_DRY_01_RUNNER_ENTER", "dry_run", { accountId, scheduleId });
   const config = configmod.load();
@@ -272,6 +284,15 @@ export async function runScheduledDryRun(
   if (!account) {
     trace?.emit("PING_DRY_02_ACCOUNT_REJECTED", "dry_run", { accountId });
     return 64;
+  }
+  if (account.agent === "codex" && expectedStoreId !== undefined
+    && (!expectedStoreId || expectedStoreId === "-" || account.storeId !== expectedStoreId)) {
+    trace?.emit("PING_DRY_STORE_REJECTED", "dry_run", {
+      accountId,
+      expectedStoreId,
+      activeStoreId: account.storeId ?? null,
+    });
+    return 75;
   }
   const index = Number(scheduleId.split("-").at(-1));
   const time = account.schedules[index];
