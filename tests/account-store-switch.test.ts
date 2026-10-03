@@ -82,7 +82,7 @@ describe("R1.07 account switch transaction", () => {
   it("reloads canonical store bindings before syncing one-shot resumes after Save", () => {
     const service = source("src/gui/service.ts");
     const saveAt = service.indexOf("save(payload: SavePayload)");
-    const persistAt = service.indexOf("savePreferences(payload.preferences)", saveAt);
+    const persistAt = service.indexOf("savePreferences(canonicalPreferences)", saveAt);
     const reloadAt = service.indexOf("const savedPreferences = loadPreferences", persistAt);
     const syncAt = service.indexOf("activeTaskResumeSchedules(savedPreferences)", reloadAt);
     assert.ok(saveAt >= 0);
