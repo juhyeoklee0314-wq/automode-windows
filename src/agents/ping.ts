@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { logPath, stateDir } from "../core/config.js";
 import type { Config } from "../core/config.js";
 import type { Logger } from "../core/log.js";
+import { redactSecrets } from "../core/redact.js";
 import { parseHhmm } from "../core/timeutil.js";
 import { prepareSpawn, which } from "../platform/command.js";
 
@@ -22,6 +23,8 @@ export { which } from "../platform/command.js";
 export const LABEL = "com.automode.ping";
 export const AGENTS = ["claude", "codex"] as const;
 const PING_TIMEOUT_MS = 300_000;
+const PING_STDERR_BUFFER_CHARS = 16_384;
+const PING_STDERR_LOG_CHARS = 4_096;
 const WINDOWS_TASK_PREFIX = "Automode Ping";
 
 export function headlessArgv(agent: string, message: string): string[] {
@@ -43,6 +46,18 @@ export function buildPingEnvironment(overrides?: NodeJS.ProcessEnv, unset: strin
   return env;
 }
 
+export function pingDiagnosticTail(value: string, maxChars = PING_STDERR_LOG_CHARS): string {
+  const clean = redactSecrets(value)
+    .replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g, "")
+    .replace(/[\r\n]+/g, " | ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return "";
+  const limit = Math.max(256, Math.min(maxChars, PING_STDERR_LOG_CHARS));
+  return clean.length <= limit ? clean : `…${clean.slice(-limit)}`;
+}
+
 export async function pingOnce(agent: string, message: string, log?: Logger, options: PingOnceOptions = {}): Promise<number> {
   const [command, ...args] = headlessArgv(agent, message);
   const resolved = which(command!);
@@ -59,14 +74,23 @@ function runPingProcess(command: string, args: string[], agent: string, log?: Lo
   return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: buildPingEnvironment(env, unsetEnv) });
     let settled = false;
+    let stderrTail = "";
     child.stdout?.resume();
-    child.stderr?.resume();
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string | Buffer) => {
+      stderrTail = (stderrTail + String(chunk)).slice(-PING_STDERR_BUFFER_CHARS);
+    });
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (code === 0) log?.(`ping ${agent} -> rc=0`);
-      else log?.(`ping ${agent}: failed (${code})`);
+      if (code === 0) {
+        log?.(`ping ${agent} -> rc=0`);
+      } else {
+        log?.(`ping ${agent}: failed (${code})`);
+        const diagnostic = pingDiagnosticTail(stderrTail);
+        if (diagnostic) log?.(`ping ${agent}: stderr: ${diagnostic}`);
+      }
       resolve(code);
     };
     const timer = setTimeout(() => {
