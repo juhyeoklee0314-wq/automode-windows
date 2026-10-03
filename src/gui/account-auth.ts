@@ -147,7 +147,7 @@ export async function readCodexProviderIdentity(command: string, account: Accoun
     let captured = 0;
     let baseIdentity: CodexAccountIdentity | null = null;
 
-    const finish = (identity: CodexAccountIdentity | null) => {
+    const finish = (identity: CodexProviderIdentity | null) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
