@@ -73,9 +73,12 @@ export interface TaskResumeSchedule {
 }
 
 export interface GuiPreferences {
-  schemaVersion: 1;
+  schemaVersion: 2;
   runAtLogin: boolean;
   schedulerEnabled: boolean;
+  profiles: LocalProfile[];
+  accountStores: AccountStore[];
+  /** Runtime compatibility projection: one active store per local profile. Not persisted in schema v2. */
   accounts: AccountProfile[];
   taskResumeSchedules: TaskResumeSchedule[];
 }
