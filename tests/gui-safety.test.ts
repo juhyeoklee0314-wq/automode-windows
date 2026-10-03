@@ -289,10 +289,10 @@ describe("log retention and ping diagnostics", () => {
   });
 
   it("redacts and bounds stderr diagnostics before they reach the log", () => {
-    const raw = "\u001b[31mAuthorization: Bearer secret-token-value\u001b[0m\n"
+    const raw = "x".repeat(10_000)
+      + "\n\u001b[31mAuthorization: Bearer secret-token-value\u001b[0m\n"
       + "OPENAI_API_KEY=sk-abcdefghijk\n"
-      + "codex: account authentication failed\n"
-      + "x".repeat(10_000);
+      + "codex: account authentication failed";
     const diagnostic = pingDiagnosticTail(raw, 1024);
     assert.doesNotMatch(diagnostic, /secret-token-value|sk-abcdefghijk/);
     assert.match(diagnostic, /REDACTED/);
