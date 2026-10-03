@@ -142,6 +142,14 @@ describe("R1.07 account switch transaction", () => {
     assert.ok(resumeAt > mismatchAt);
   });
 
+  it("labels blocked migration data as legacy storage and makes reconnect wording account-neutral", () => {
+    const renderer = source("src/gui/renderer/app.js");
+    assert.match(renderer, /migration_review"\) return "Legacy R1\.06 data"/);
+    assert.match(renderer, /\+ Connect account/);
+    assert.match(renderer, /same ChatGPT account or a different one/);
+    assert.doesNotMatch(renderer, /\+ Add another account/);
+  });
+
   it("keeps inactive stores out of the ordinary profile surface", () => {
     const renderer = source("src/gui/renderer/app.js");
     const renderAccountsAt = renderer.indexOf("function renderAccounts");
