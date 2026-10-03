@@ -131,6 +131,7 @@ function projectTaskResumeSchedules(
   raw: { taskResumeSchedules?: unknown },
   profiles: LocalProfile[],
   stores: AccountStore[],
+  allowLegacyStoreFallback: boolean,
 ): TaskResumeSchedule[] {
   if (!Array.isArray(raw.taskResumeSchedules)) return [];
   const seen = new Set<string>();
@@ -149,6 +150,7 @@ function projectTaskResumeSchedules(
     let storeId = String(entry?.storeId ?? "");
     const explicitStore = storeById.get(storeId);
     if (!explicitStore || explicitStore.profileId !== accountId) {
+      if (!allowLegacyStoreFallback) continue;
       storeId = profile.activeStoreId ?? "";
     }
     const store = storeById.get(storeId);
@@ -221,7 +223,7 @@ function projectV1(raw: Record<string, unknown>, config: Config): GuiPreferences
     Boolean(raw.schedulerEnabled),
     migrated.profiles,
     migrated.accountStores,
-    projectTaskResumeSchedules(raw, migrated.profiles, migrated.accountStores),
+    projectTaskResumeSchedules(raw, migrated.profiles, migrated.accountStores, true),
   );
 }
 
@@ -284,7 +286,7 @@ function projectV2(raw: Record<string, unknown>, config: Config): GuiPreferences
     Boolean(raw.schedulerEnabled),
     profiles,
     accountStores,
-    projectTaskResumeSchedules(raw, profiles, accountStores),
+    projectTaskResumeSchedules(raw, profiles, accountStores, false),
   );
 }
 
