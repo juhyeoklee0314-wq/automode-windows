@@ -49,6 +49,27 @@ describe("R1.07 account switch transaction", () => {
     assert.ok(syncAt > reloadAt);
   });
 
+  it("restores the previous active binding when scheduler reconciliation fails", () => {
+    const service = source("src/gui/service.ts");
+    const methodAt = service.indexOf("async activateAccountStore");
+    const previousAt = service.indexOf("const previousActiveStoreId", methodAt);
+    const commitAt = service.indexOf("profile.activeStoreId = storeId", previousAt);
+    const catchAt = service.indexOf("} catch (error) {", commitAt);
+    const rollbackAt = service.indexOf("rollbackProfile.activeStoreId = previousActiveStoreId", catchAt);
+    const restoreSchedulesAt = service.indexOf("rollback.taskResumeSchedules = previousTaskResumeSchedules", rollbackAt);
+    assert.ok(previousAt > methodAt);
+    assert.ok(commitAt > previousAt);
+    assert.ok(catchAt > commitAt);
+    assert.ok(rollbackAt > catchAt);
+    assert.ok(restoreSchedulesAt > rollbackAt);
+    assert.match(service.slice(catchAt), /ACCOUNT_STORE_ACTIVATION_ROLLED_BACK/);
+  });
+
+  it("does not install Codex ping tasks for a profile with no active store", () => {
+    const scheduler = source("src/gui/scheduler.ts");
+    assert.match(scheduler, /entry\.agent !== "codex" \|\| Boolean\(entry\.codexHome && entry\.storeId\)/);
+  });
+
   it("pauses inactive one-shot resumes and refuses stale-store execution", () => {
     const preferences = source("src/gui/preferences.ts");
     const main = source("src/gui/main.ts");
