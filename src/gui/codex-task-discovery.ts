@@ -272,6 +272,18 @@ function rolloutCreatorAccountId(text: string): string | null {
   return null;
 }
 
+export function readRolloutCreatorAccountIds(codexHome: string): Array<string | null> {
+  const creators: Array<string | null> = [];
+  for (const path of activeRolloutPaths(codexHome)) {
+    try {
+      creators.push(rolloutCreatorAccountId(readPrefix(path)));
+    } catch {
+      creators.push(null);
+    }
+  }
+  return creators;
+}
+
 function listRolloutSource(target: DiscoveryTarget): RolloutSource {
   if (target.source !== "account") return { items: [], creatorByThread: new Map() };
   const items = new Map<string, TaskInventoryItem>();
