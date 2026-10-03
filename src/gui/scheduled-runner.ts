@@ -6,6 +6,7 @@ import { acquireExecutionLock, activeExecutionLockCount, leaseIsLive } from "./l
 import { loadPreferences } from "./preferences.js";
 import { recentlyResumedFromSuspend } from "./power-state.js";
 import { reliablePing } from "./reliable-ping.js";
+import { ensureActiveAccountStore } from "./account-store-runtime.js";
 import { which } from "../platform/command.js";
 import type { DiagnosticTrace } from "./diagnostics.js";
 import type { AccountProfile, GuiPreferences } from "./types.js";
@@ -148,8 +149,18 @@ export async function runScheduled(
   const preferences = loadPreferences(config);
   if (!preferences.schedulerEnabled) return 75;
 
-  const account = preferences.accounts.find((entry) => entry.id === accountId && entry.enabled);
+  let account = preferences.accounts.find((entry) => entry.id === accountId && entry.enabled);
   if (!account) return 64;
+
+  if (account.agent === "codex") {
+    const verified = await ensureActiveAccountStore(accountId);
+    if (verified.state !== "ready" || !verified.account) {
+      trace?.emit("PING_ACCOUNT_STORE_REJECTED", "scheduled", { accountId, state: verified.state });
+      log(`scheduled ping refused: ${verified.detail}`);
+      return 75;
+    }
+    account = verified.account;
+  }
 
   const index = Number(scheduleId.split("-").at(-1));
   const time = account.schedules[index];
