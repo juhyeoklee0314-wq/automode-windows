@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test";
 
 import { DEFAULTS } from "../src/core/config.js";
 import { classifyCodexLoginStatus, deviceLoginPendingStatus, parseCodexAccountIdentity, parseCodexDeviceLoginPrompt } from "../src/gui/account-auth.js";
-import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath } from "../src/gui/preferences.js";
+import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
 
@@ -110,6 +110,20 @@ describe("multi-account profile persistence", () => {
     assert.equal(loaded.accounts[0]?.catchupMinutes, DEFAULTS.ping.catchup_minutes);
     assert.equal(loaded.accounts[0]?.wakePc, false);
     assert.equal(loaded.accounts[0]?.codexHome, join(codexProfilesRoot(), "default"));
+    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.profiles[0]?.activeStoreId, "store-default-legacy");
+    assert.equal(loaded.accountStores[0]?.bindingState, "migration_pending");
+    assert.equal(loaded.accountStores[0]?.codexHome, join(codexProfilesRoot(), "default"));
+  });
+
+  it("persists schema v2 without writing the runtime accounts projection", () => {
+    const loaded = loadPreferences(DEFAULTS);
+    savePreferences(loaded);
+    const raw = JSON.parse(readFileSync(preferencesPath(), "utf8")) as Record<string, unknown>;
+    assert.equal(raw.schemaVersion, 2);
+    assert.ok(Array.isArray(raw.profiles));
+    assert.ok(Array.isArray(raw.accountStores));
+    assert.equal("accounts" in raw, false);
   });
 
   it("creates independent Codex homes and safe unique profile ids", () => {
