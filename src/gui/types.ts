@@ -10,6 +10,10 @@ export interface AccountProfile {
   agent: "claude" | "codex";
   catchupMinutes?: number;
   wakePc?: boolean;
+  /** R1.07 active account-store metadata. */
+  storeId?: string | null;
+  storeIdentityKey?: string | null;
+  storeBindingState?: AccountStoreBindingState | null;
 }
 
 export interface AutomationSettings {
@@ -45,7 +49,17 @@ export interface AccountStore {
   automation: AutomationSettings;
 }
 
-export type AccountAuthState = "connected" | "wrong_auth" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
+export type AccountAuthState =
+  | "connected"
+  | "wrong_auth"
+  | "not_connected"
+  | "cli_missing"
+  | "not_codex"
+  | "login_started"
+  | "profile_missing"
+  | "account_unverified"
+  | "account_mismatch"
+  | "migration_review";
 
 export interface AccountAuthStatus {
   accountId: string;
