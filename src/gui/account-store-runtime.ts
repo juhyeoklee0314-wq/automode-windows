@@ -1,10 +1,10 @@
 import { which } from "../platform/command.js";
 import * as configmod from "../core/config.js";
 import { readCodexProviderIdentity } from "./account-auth.js";
-import { providerIdentityKey } from "./account-store-model.js";
+import { projectAccountProfileForStore, providerIdentityKey } from "./account-store-model.js";
 import { decideStoreMigration } from "./account-store-verification.js";
 import { readRolloutCreatorAccountIds } from "./codex-task-discovery.js";
-import { loadPreferences, savePreferences } from "./preferences.js";
+import { loadPreferences, saveCanonicalPreferences } from "./preferences.js";
 import type { AccountProfile } from "./types.js";
 
 export type ActiveStoreRuntimeState =
@@ -12,37 +12,32 @@ export type ActiveStoreRuntimeState =
   | "profile_missing"
   | "account_unverified"
   | "account_mismatch"
+  | "account_already_stored"
   | "migration_review";
 
 export interface ActiveStoreRuntimeCheck {
   state: ActiveStoreRuntimeState;
   account: AccountProfile | null;
   detail: string;
+  existingStoreId?: string | null;
 }
 
-export async function ensureActiveAccountStore(profileId: string): Promise<ActiveStoreRuntimeCheck> {
+export async function verifyAccountStore(profileId: string, storeId: string): Promise<ActiveStoreRuntimeCheck> {
   const config = configmod.load();
   const preferences = loadPreferences(config);
   const profile = preferences.profiles.find((entry) => entry.id === profileId);
-  const account = preferences.accounts.find((entry) => entry.id === profileId);
-
-  if (!profile || !account || account.agent !== "codex" || !account.codexHome || !account.storeId) {
-    return {
-      state: "profile_missing",
-      account: null,
-      detail: "The selected Codex profile has no active account store.",
-    };
-  }
-
   const store = preferences.accountStores.find((entry) =>
-    entry.id === account.storeId && entry.profileId === profileId);
-  if (!store) {
+    entry.id === storeId && entry.profileId === profileId);
+
+  if (!profile || profile.agent !== "codex" || !store) {
     return {
       state: "profile_missing",
       account: null,
-      detail: "The active account store is missing.",
+      detail: "The selected Codex account store was not found.",
     };
   }
+
+  const account = projectAccountProfileForStore(profile, store);
 
   if (store.bindingState === "migration_review") {
     return {
@@ -66,7 +61,7 @@ export async function ensureActiveAccountStore(profileId: string): Promise<Activ
     return {
       state: "account_unverified",
       account,
-      detail: "PingGPT could not verify the active ChatGPT account identity.",
+      detail: "PingGPT could not verify the selected ChatGPT account identity.",
     };
   }
 
@@ -77,7 +72,7 @@ export async function ensureActiveAccountStore(profileId: string): Promise<Activ
       return {
         state: "account_mismatch",
         account,
-        detail: "The active CODEX_HOME is authenticated as a different ChatGPT account.",
+        detail: "This CODEX_HOME is authenticated as a different ChatGPT account.",
       };
     }
 
@@ -90,7 +85,7 @@ export async function ensureActiveAccountStore(profileId: string): Promise<Activ
       store.planType = identity.planType;
       changed = true;
     }
-    if (changed) savePreferences(preferences);
+    if (changed) saveCanonicalPreferences(preferences);
 
     return {
       state: "ready",
@@ -99,7 +94,7 @@ export async function ensureActiveAccountStore(profileId: string): Promise<Activ
         storeIdentityKey: store.identityKey,
         storeBindingState: "bound",
       },
-      detail: "Active account store identity verified.",
+      detail: "Account store identity verified.",
     };
   }
 
@@ -113,7 +108,7 @@ export async function ensureActiveAccountStore(profileId: string): Promise<Activ
     store.identityKey = null;
     store.lastKnownEmail = identity.email;
     store.planType = identity.planType;
-    savePreferences(preferences);
+    saveCanonicalPreferences(preferences);
     return {
       state: "migration_review",
       account: {
@@ -133,11 +128,25 @@ export async function ensureActiveAccountStore(profileId: string): Promise<Activ
     };
   }
 
+  const duplicate = preferences.accountStores.find((entry) =>
+    entry.profileId === profileId
+    && entry.id !== store.id
+    && entry.bindingState === "bound"
+    && entry.identityKey === decision.identityKey);
+  if (duplicate) {
+    return {
+      state: "account_already_stored",
+      account,
+      existingStoreId: duplicate.id,
+      detail: "This ChatGPT account already has a stored account context for this profile.",
+    };
+  }
+
   store.bindingState = "bound";
   store.identityKey = decision.identityKey;
   store.lastKnownEmail = identity.email;
   store.planType = identity.planType;
-  savePreferences(preferences);
+  saveCanonicalPreferences(preferences);
 
   return {
     state: "ready",
@@ -148,4 +157,17 @@ export async function ensureActiveAccountStore(profileId: string): Promise<Activ
     },
     detail: "Account store verified and bound.",
   };
+}
+
+export async function ensureActiveAccountStore(profileId: string): Promise<ActiveStoreRuntimeCheck> {
+  const preferences = loadPreferences(configmod.load());
+  const profile = preferences.profiles.find((entry) => entry.id === profileId);
+  if (!profile?.activeStoreId) {
+    return {
+      state: "profile_missing",
+      account: null,
+      detail: "The selected Codex profile has no active account store.",
+    };
+  }
+  return await verifyAccountStore(profileId, profile.activeStoreId);
 }
