@@ -81,6 +81,7 @@ describe("one-shot task resume scheduler", () => {
     const schedule = {
       id: "resume-abc",
       accountId: "profile-a",
+      storeId: "store-profile-a",
       threadId: "01a00000-0000-7000-8000-000000000001",
       title: "Task",
       runAt: new Date(Date.now() + 60_000).toISOString(),
