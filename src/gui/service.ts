@@ -118,14 +118,25 @@ export class GuiService {
       payload.config.ping.catchup_minutes = primary.catchupMinutes ?? payload.config.ping.catchup_minutes;
     }
     configmod.save(payload.config);
+
+    // Background account verification may have advanced canonical store state after
+    // the renderer snapshot was created. Rebase user-editable profile fields onto
+    // the latest canonical preferences so Save changes cannot write stale store
+    // bindings (for example migration_pending over migration_review) back to disk.
+    const canonicalPreferences = loadPreferences(configmod.load());
+    canonicalPreferences.runAtLogin = payload.preferences.runAtLogin;
+    canonicalPreferences.schedulerEnabled = payload.preferences.schedulerEnabled;
+    canonicalPreferences.accounts = payload.preferences.accounts;
+
     const resumableAccounts = new Set(
-      payload.preferences.accounts
+      canonicalPreferences.accounts
         .filter((account) => account.enabled && account.agent === "codex" && Boolean(account.codexHome))
         .map((account) => account.id),
     );
-    payload.preferences.taskResumeSchedules = payload.preferences.taskResumeSchedules
+    canonicalPreferences.taskResumeSchedules = canonicalPreferences.taskResumeSchedules
       .filter((schedule) => resumableAccounts.has(schedule.accountId));
-    savePreferences(payload.preferences);
+
+    savePreferences(canonicalPreferences);
     const savedPreferences = loadPreferences(configmod.load());
     this.taskResumeScheduler.sync(activeTaskResumeSchedules(savedPreferences));
     if (savedPreferences.schedulerEnabled) {
