@@ -158,6 +158,6 @@ describe("R1.07 account switch transaction", () => {
     assert.ok(managerAt > renderAccountsAt);
     assert.doesNotMatch(renderer.slice(renderAccountsAt, managerAt), /getAccountStores/);
     assert.match(renderer.slice(managerAt), /getAccountStores\(profileId\)/);
-    assert.match(renderer, /Only the current account is shown outside this panel/);
+    assert.match(renderer, /Each connection uses a separate store/);
   });
 });
