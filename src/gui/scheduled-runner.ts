@@ -67,6 +67,11 @@ function wakeBatchDue(
 ): boolean {
   for (const candidate of preferences.accounts) {
     if (!candidate.enabled || candidate.wakePc !== true) continue;
+    if (candidate.agent === "codex" && (
+      !candidate.codexHome
+      || candidate.storeBindingState === "pending"
+      || candidate.storeBindingState === "migration_review"
+    )) continue;
     const limit = Math.min(accountCatchupMinutes(candidate, config), WAKE_CORRELATION_MINUTES);
     for (const time of candidate.schedules) {
       const elapsed = elapsedMinutesForSchedule(now, timezone, time);
