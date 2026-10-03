@@ -80,26 +80,33 @@ export function activeStoreForProfile(
     store.id === profile.activeStoreId && store.profileId === profile.id) ?? null;
 }
 
+export function projectAccountProfileForStore(
+  profile: LocalProfile,
+  store: AccountStore | null,
+): AccountProfile {
+  const automation = store?.automation ?? profile.automation;
+  return {
+    id: profile.id,
+    displayName: profile.displayName,
+    enabled: profile.enabled,
+    codexHome: store?.codexHome,
+    message: automation.message,
+    schedules: [...automation.schedules],
+    agent: profile.agent,
+    catchupMinutes: automation.catchupMinutes,
+    wakePc: automation.wakePc,
+    storeId: store?.id ?? null,
+    storeIdentityKey: store?.identityKey ?? null,
+    storeBindingState: store?.bindingState ?? null,
+  };
+}
+
 export function projectActiveAccountProfiles(
   profiles: LocalProfile[],
   stores: AccountStore[],
 ): AccountProfile[] {
   return profiles.map((profile) => {
     const store = profile.agent === "codex" ? activeStoreForProfile(profile, stores) : null;
-    const automation = store?.automation ?? profile.automation;
-    return {
-      id: profile.id,
-      displayName: profile.displayName,
-      enabled: profile.enabled,
-      codexHome: store?.codexHome,
-      message: automation.message,
-      schedules: [...automation.schedules],
-      agent: profile.agent,
-      catchupMinutes: automation.catchupMinutes,
-      wakePc: automation.wakePc,
-      storeId: store?.id ?? null,
-      storeIdentityKey: store?.identityKey ?? null,
-      storeBindingState: store?.bindingState ?? null,
-    };
+    return projectAccountProfileForStore(profile, store);
   });
 }
