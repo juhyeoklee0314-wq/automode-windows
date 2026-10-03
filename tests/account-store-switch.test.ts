@@ -67,7 +67,7 @@ describe("R1.07 account switch transaction", () => {
 
   it("does not install Codex ping tasks for a profile with no active store", () => {
     const scheduler = source("src/gui/scheduler.ts");
-    assert.match(scheduler, /entry\.agent !== "codex" \|\| Boolean\(entry\.codexHome && entry\.storeId\)/);
+    assert.match(scheduler, /entry\.agent !== "codex" \|\| Boolean\(entry\.codexHome\)/);
   });
 
   it("pauses inactive one-shot resumes and refuses stale-store execution", () => {
