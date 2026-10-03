@@ -701,7 +701,7 @@ async function openStoreLogin(status, profileId, storeId) {
       showBanner("Could not open the Codex device login page or copy its code.", true);
       return;
     }
-    showBanner(`Device code ${status.loginCode} copied. Choose the intended ChatGPT account in the browser.`);
+    showBanner(`Device code: ${status.loginCode} copied to clipboard. Choose the intended ChatGPT account in the browser.`);
   }
   await pollAccountStoreAuth(profileId, storeId);
 }
