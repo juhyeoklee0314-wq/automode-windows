@@ -190,9 +190,13 @@ function accountCard(account, saved = true) {
   authCopy.append(authTitle, authMeta, authPath, authStatus);
   const connectButton = document.createElement("button");
   connectButton.className = "secondary small connect-account";
-  connectButton.textContent = "Connect";
-  connectButton.onclick = () => connectAccount(card);
+  connectButton.textContent = "Manage account";
+  connectButton.onclick = () => toggleAccountManager(card);
   auth.append(authCopy, connectButton);
+
+  const accountManager = document.createElement("div");
+  accountManager.className = "account-store-manager hidden";
+  accountManager.dataset.profileId = account.id;
 
   const messageLabel = document.createElement("label");
   messageLabel.className = "account-message";
@@ -227,7 +231,7 @@ function accountCard(account, saved = true) {
   enableInput.onchange = updateVisibility;
   agentSelect.onchange = updateVisibility;
 
-  card.append(head, grid, auth, messageLabel, timesWrap);
+  card.append(head, grid, auth, accountManager, messageLabel, timesWrap);
   updateVisibility();
   return card;
 }
@@ -394,7 +398,7 @@ function applyAuthStatus(status) {
   const button = card?.querySelector(".connect-account");
   const identity = card?.querySelector(".account-auth-identity");
   const meta = card?.querySelector(".account-auth-meta");
-  if (button) button.textContent = status.state === "connected" ? "Reconnect" : "Connect";
+  if (button) button.textContent = "Manage account";
 
   if (status.state === "connected") {
     el.textContent = status.identityVerified === false ? "CONNECTED · IDENTITY UNKNOWN" : "CONNECTED";
@@ -422,6 +426,19 @@ function applyAuthStatus(status) {
         ? "Code copied to clipboard. Paste it into the browser page."
         : "Waiting for device login to complete…";
     }
+  } else if (status.state === "account_mismatch") {
+    el.textContent = "ACCOUNT MISMATCH";
+    el.classList.add("bad");
+    if (identity) identity.textContent = status.email || "Stored ChatGPT account";
+    if (meta) meta.textContent = "The active account store is authenticated as a different ChatGPT account";
+  } else if (status.state === "account_unverified") {
+    el.textContent = "ACCOUNT UNVERIFIED";
+    el.classList.add("bad");
+    if (meta) meta.textContent = status.detail || "PingGPT could not verify the provider account identity";
+  } else if (status.state === "migration_review") {
+    el.textContent = "MIGRATION REVIEW";
+    el.classList.add("bad");
+    if (meta) meta.textContent = "Existing R1.06 task ownership conflicts with the current login; automatic execution is blocked";
   } else if (status.state === "wrong_auth") {
     el.textContent = "NOT CHATGPT AUTH";
     el.classList.add("bad");
@@ -458,53 +475,257 @@ async function refreshAuthStatus(accountId) {
   }
 }
 
-async function pollAuthStatus(accountId) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    const status = await refreshAuthStatus(accountId);
-    if (!status || status.state === "cli_missing") return;
-    if (status.state === "connected" && status.identityVerified !== false) {
-      await refreshTasks({ source: "reconnect", quiet: true });
+function profileCard(profileId) {
+  return [...$("account-list").querySelectorAll(".account-card")]
+    .find((entry) => entry.dataset.accountId === profileId) || null;
+}
+
+function storeDisplayLabel(store) {
+  if (store.email) return store.email;
+  if (store.bindingState === "migration_review") return "Existing account data";
+  if (store.bindingState === "migration_pending") return "Existing account";
+  if (store.bindingState === "pending") return "New account setup";
+  return "Stored ChatGPT account";
+}
+
+function storeMetaLabel(store) {
+  const parts = [];
+  if (store.active) parts.push("Current");
+  const plan = formatPlanType(store.planType);
+  if (plan) parts.push(plan);
+  if (store.bindingState === "migration_review") parts.push("Migration review required");
+  else if (store.bindingState === "migration_pending") parts.push("Verifying existing data");
+  else if (store.bindingState === "pending") parts.push("Not connected yet");
+  else parts.push("Identity verified");
+  return parts.join(" · ");
+}
+
+async function renderAccountStoreManager(card) {
+  const profileId = card.dataset.accountId;
+  const panel = card.querySelector(".account-store-manager");
+  if (!panel) return;
+  panel.classList.remove("hidden");
+  panel.replaceChildren();
+
+  const head = document.createElement("div");
+  head.className = "account-store-manager-head";
+  const copy = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = "Manage account";
+  const note = document.createElement("small");
+  note.textContent = "Only the current account is shown outside this panel.";
+  copy.append(title, note);
+  const close = document.createElement("button");
+  close.className = "secondary small";
+  close.textContent = "Close";
+  close.onclick = () => panel.classList.add("hidden");
+  head.append(copy, close);
+
+  const list = document.createElement("div");
+  list.className = "account-store-list";
+  panel.append(head, list);
+
+  let stores;
+  try {
+    stores = await window.automode.getAccountStores(profileId);
+  } catch (error) {
+    const failed = document.createElement("small");
+    failed.textContent = "Could not read stored accounts: " + (error.message || error);
+    list.append(failed);
+    return;
+  }
+
+  if (!stores.length) {
+    const empty = document.createElement("small");
+    empty.textContent = "No connected ChatGPT account is stored for this profile.";
+    list.append(empty);
+  }
+
+  stores.forEach((store) => {
+    const row = document.createElement("div");
+    row.className = "account-store-row" + (store.active ? " active" : "");
+
+    const storeCopy = document.createElement("div");
+    storeCopy.className = "account-store-copy";
+    const label = document.createElement("strong");
+    label.textContent = storeDisplayLabel(store);
+    const meta = document.createElement("small");
+    meta.textContent = storeMetaLabel(store);
+    storeCopy.append(label, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "account-store-actions";
+    const action = document.createElement("button");
+    action.className = "secondary small";
+
+    if (store.bindingState === "migration_review") {
+      action.textContent = "Blocked";
+      action.disabled = true;
+    } else if (store.active && store.bindingState === "bound") {
+      action.textContent = "Sign in again";
+      action.onclick = () => startStoreLogin(profileId, store.storeId);
+    } else if (store.active) {
+      action.textContent = "Finish setup";
+      action.onclick = () => useAccountStore(profileId, store.storeId);
+    } else {
+      action.textContent = "Use account";
+      action.onclick = () => useAccountStore(profileId, store.storeId);
+    }
+
+    actions.append(action);
+    row.append(storeCopy, actions);
+    list.append(row);
+  });
+
+  const footer = document.createElement("div");
+  footer.className = "account-store-footer";
+  const add = document.createElement("button");
+  add.className = "secondary small";
+  add.textContent = "+ Add another account";
+  add.onclick = async () => {
+    add.disabled = true;
+    try {
+      const store = await window.automode.createAccountStore(profileId);
+      await startStoreLogin(profileId, store.storeId);
+    } catch (error) {
+      showBanner("Could not prepare another account: " + (error.message || error), true);
+      add.disabled = false;
+    }
+  };
+  footer.append(add);
+  panel.append(footer);
+}
+
+async function toggleAccountManager(card) {
+  const profileId = card.dataset.accountId;
+  if (card.dataset.saved !== "true") {
+    try {
+      await saveChanges(false);
+    } catch (error) {
+      showBanner("Save this profile before managing its account: " + (error.message || error), true);
       return;
     }
-    if (status.state === "connected" && attempt >= 4) return;
+    card = profileCard(profileId);
+    if (!card) return;
+  }
+
+  const panel = card.querySelector(".account-store-manager");
+  if (!panel) return;
+  if (!panel.classList.contains("hidden")) {
+    panel.classList.add("hidden");
+    return;
+  }
+  await renderAccountStoreManager(card);
+}
+
+async function activateVerifiedStore(profileId, storeId) {
+  try {
+    // Preserve any current profile/schedule edits before the account-store commit reloads the snapshot.
+    await saveChanges(false);
+    const next = await window.automode.activateAccountStore(profileId, storeId);
+    render(next);
+    await refreshTasks({ source: "account-switch", quiet: true });
+    showBanner("Account connected to this profile.");
+  } catch (error) {
+    showBanner("Could not switch account: " + (error.message || error), true);
   }
 }
 
-async function connectAccount(card) {
-  const accountId = card.dataset.accountId;
-  const button = card.querySelector(".connect-account");
-  button.disabled = true;
-  try {
-    await saveChanges(false);
-    const status = await window.automode.connectAccount(accountId);
-    applyAuthStatus(status);
-    showBanner(
-      status.state === "login_started" && status.loginCode
-        ? `Choose the intended ChatGPT account in the browser and enter code ${status.loginCode}.`
-        : status.detail,
-      ["cli_missing", "not_connected", "profile_missing"].includes(status.state),
-    );
-    if (status.state === "login_started") {
-      if (status.loginUrl && status.loginCode) {
-        const opened = await window.automode.openExternalLogin(status.loginUrl, status.loginCode);
-        if (opened) {
-          showBanner(`Device code ${status.loginCode} copied to clipboard. Paste it into the browser.`);
-        } else {
-          showBanner("Could not open the Codex device login page or copy its code.", true);
-        }
-      }
-      pollAuthStatus(accountId);
+async function handleStoreStatus(profileId, storeId, status) {
+  if (!status) return "stop";
+
+  if (status.state === "connected" && status.identityVerified !== false) {
+    await activateVerifiedStore(profileId, storeId);
+    return "done";
+  }
+
+  if (status.state === "account_already_stored") {
+    showBanner("That ChatGPT account is already stored for this profile. Choose the existing account instead.", true);
+    const card = profileCard(profileId);
+    if (card) await renderAccountStoreManager(card);
+    return "stop";
+  }
+
+  if (status.state === "migration_review") {
+    showBanner("This existing store needs migration review before it can run.", true);
+    return "stop";
+  }
+
+  if (status.state === "account_mismatch") {
+    return "login";
+  }
+
+  if (["cli_missing", "profile_missing", "wrong_auth"].includes(status.state)) {
+    showBanner(status.detail || "Account connection failed.", true);
+    return "stop";
+  }
+
+  return "wait";
+}
+
+async function pollAccountStoreAuth(profileId, storeId) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    let status;
+    try {
+      status = await window.automode.getAccountStoreAuthStatus(profileId, storeId);
+    } catch (error) {
+      showBanner("Could not verify account login: " + (error.message || error), true);
+      return;
     }
+
+    const outcome = await handleStoreStatus(profileId, storeId, status);
+    if (outcome === "done" || outcome === "stop") return;
+
+    if (status.state === "account_mismatch") {
+      showBanner("A different ChatGPT account was selected. The stored account was not changed.", true);
+      return;
+    }
+
+    if (status.state === "account_unverified" && attempt >= 4) {
+      showBanner("Login completed, but the ChatGPT account identity could not be verified.", true);
+      return;
+    }
+  }
+  showBanner("Timed out waiting for ChatGPT account verification.", true);
+}
+
+async function openStoreLogin(status, profileId, storeId) {
+  if (status.state !== "login_started") {
+    showBanner(status.detail || "Could not start ChatGPT login.", true);
+    return;
+  }
+  if (status.loginUrl && status.loginCode) {
+    const opened = await window.automode.openExternalLogin(status.loginUrl, status.loginCode);
+    if (!opened) {
+      showBanner("Could not open the Codex device login page or copy its code.", true);
+      return;
+    }
+    showBanner(`Device code ${status.loginCode} copied. Choose the intended ChatGPT account in the browser.`);
+  }
+  await pollAccountStoreAuth(profileId, storeId);
+}
+
+async function startStoreLogin(profileId, storeId) {
+  try {
+    const status = await window.automode.connectAccountStore(profileId, storeId);
+    await openStoreLogin(status, profileId, storeId);
   } catch (error) {
-    showBanner(`Could not start account login: ${error.message || error}`, true);
-  } finally {
-    const current = [...$("account-list").querySelectorAll(".account-card")]
-      .find((entry) => entry.dataset.accountId === accountId);
-    const currentButton = current?.querySelector(".connect-account");
-    if (currentButton) currentButton.disabled = false;
+    showBanner("Could not start account login: " + (error.message || error), true);
   }
 }
+
+async function useAccountStore(profileId, storeId) {
+  try {
+    const status = await window.automode.getAccountStoreAuthStatus(profileId, storeId);
+    const outcome = await handleStoreStatus(profileId, storeId, status);
+    if (outcome === "done" || outcome === "stop") return;
+    await startStoreLogin(profileId, storeId);
+  } catch (error) {
+    showBanner("Could not use this account: " + (error.message || error), true);
+  }
+}
+
 
 function formatTaskTime(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return "Unknown time";
