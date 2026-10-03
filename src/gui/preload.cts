@@ -19,6 +19,14 @@ const api: AutomodeApi = Object.freeze({
   setScheduler: (enabled: boolean) => ipcRenderer.invoke("automode:set-scheduler", enabled),
   setRunAtLogin: (enabled: boolean) => ipcRenderer.invoke("automode:set-login", enabled),
   newAccountProfile: () => ipcRenderer.invoke("automode:new-account-profile"),
+  getAccountStores: (profileId: string) => ipcRenderer.invoke("automode:account-stores", profileId),
+  createAccountStore: (profileId: string) => ipcRenderer.invoke("automode:account-store-create", profileId),
+  getAccountStoreAuthStatus: (profileId: string, storeId: string) =>
+    ipcRenderer.invoke("automode:account-store-auth-status", profileId, storeId),
+  connectAccountStore: (profileId: string, storeId: string) =>
+    ipcRenderer.invoke("automode:account-store-connect", profileId, storeId),
+  activateAccountStore: (profileId: string, storeId: string) =>
+    ipcRenderer.invoke("automode:account-store-activate", profileId, storeId),
   getAccountAuthStatus: (accountId: string) => ipcRenderer.invoke("automode:account-auth-status", accountId),
   connectAccount: (accountId: string) => ipcRenderer.invoke("automode:account-connect", accountId),
   openExternalLogin: (url: string, code: string) => ipcRenderer.invoke("automode:open-external-login", url, code),
