@@ -119,12 +119,13 @@ export class GuiService {
     payload.preferences.taskResumeSchedules = payload.preferences.taskResumeSchedules
       .filter((schedule) => resumableAccounts.has(schedule.accountId));
     savePreferences(payload.preferences);
-    this.taskResumeScheduler.sync(payload.preferences.taskResumeSchedules);
-    if (payload.preferences.schedulerEnabled) {
-      this.scheduler.install(payload.preferences.accounts);
+    const savedPreferences = loadPreferences(configmod.load());
+    this.taskResumeScheduler.sync(activeTaskResumeSchedules(savedPreferences));
+    if (savedPreferences.schedulerEnabled) {
+      this.scheduler.install(savedPreferences.accounts);
       writeLease(true);
     } else {
-      this.scheduler.prune(payload.preferences.accounts);
+      this.scheduler.prune(savedPreferences.accounts);
       this.scheduler.setEnabled(false);
       writeLease(false);
     }
