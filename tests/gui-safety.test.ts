@@ -156,7 +156,10 @@ describe("GUI native control wiring", () => {
 
   it("routes scheduled modes before the normal GUI path", () => {
     assert.deepEqual(resolveProcessMode(["Automode.exe", "--scheduled-runner", "default", "0600-0"]), {
-      kind: "scheduled", accountId: "default", scheduleId: "0600-0",
+      kind: "scheduled", accountId: "default", storeId: null, scheduleId: "0600-0",
+    });
+    assert.deepEqual(resolveProcessMode(["Automode.exe", "--scheduled-runner", "default", "store-default", "0600-0"]), {
+      kind: "scheduled", accountId: "default", storeId: "store-default", scheduleId: "0600-0",
     });
     assert.deepEqual(resolveProcessMode(["Automode.exe"]), { kind: "gui" });
   });
@@ -199,6 +202,7 @@ describe("Windows GUI scheduler", () => {
     const tasks = scheduler.install([{
       id: "default", displayName: "Default", enabled: true, message: "hi",
       schedules: ["06:00", "17:00"], agent: "codex",
+      codexHome: "C:\\PingGPT\\default", storeId: "store-default",
     }]);
     assert.equal(tasks.length, 2);
     assert.ok(tasks.every((task) => task.name.startsWith(GUI_TASK_PREFIX)));
@@ -208,6 +212,7 @@ describe("Windows GUI scheduler", () => {
     const action = create![create!.indexOf("/TR") + 1]!;
     assert.match(action, /C:\\Program Files\\Automode\\Automode\.exe/);
     assert.match(action, /--scheduled-runner/);
+    assert.match(action, /store-default/);
   });
 
   it("uses the original Portable launcher instead of its temporary extraction", () => {
