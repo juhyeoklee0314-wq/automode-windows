@@ -54,12 +54,12 @@ if (mode.kind === "scheduled-task-resume") {
       isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
       getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
       requestSleep: () => requestWindowsSleep(),
-    }))
+    }, mode.storeId))
     .then((code) => app.exit(code))
     .catch(() => app.exit(1));
 } else if (mode.kind === "scheduled-dry-run") {
   trace.emit("START_02_MODE_ROUTED", "dry_run");
-  runScheduledDryRun(mode.accountId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
+  runScheduledDryRun(mode.accountId, mode.scheduleId, new Date(), trace, mode.storeId).then((code) => app.exit(code));
 } else {
   trace.emit("START_02_MODE_ROUTED", "gui");
   startGui();
