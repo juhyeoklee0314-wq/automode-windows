@@ -244,9 +244,13 @@ describe("multi-account GUI wiring", () => {
     assert.doesNotMatch(html, /id="ping-agent"|id="ping-message"|id="catchup"/);
     assert.match(app, /newAccountProfile\(\)/);
     assert.match(app, /readAccounts\(\)/);
-    assert.match(app, /connectAccount\(accountId\)/);
+    assert.match(app, /toggleAccountManager\(card\)/);
+    assert.match(app, /getAccountStores\(profileId\)/);
+    assert.match(app, /createAccountStore\(profileId\)/);
+    assert.match(app, /activateAccountStore\(profileId, storeId\)/);
     assert.match(app, /account-auth-identity/);
     assert.match(app, /Identity verified by Codex/);
+    assert.match(app, /Manage account/);
   });
 
   it("wires account creation and login through sandboxed IPC", () => {
@@ -255,11 +259,21 @@ describe("multi-account GUI wiring", () => {
     assert.match(preload, /automode:new-account-profile/);
     assert.match(preload, /automode:account-auth-status/);
     assert.match(preload, /automode:account-connect/);
+    assert.match(preload, /automode:account-stores/);
+    assert.match(preload, /automode:account-store-create/);
+    assert.match(preload, /automode:account-store-auth-status/);
+    assert.match(preload, /automode:account-store-connect/);
+    assert.match(preload, /automode:account-store-activate/);
     assert.match(preload, /automode:open-external-login/);
     assert.match(preload, /url: string, code: string/);
     assert.match(main, /automode:new-account-profile/);
     assert.match(main, /automode:account-auth-status/);
     assert.match(main, /automode:account-connect/);
+    assert.match(main, /automode:account-stores/);
+    assert.match(main, /automode:account-store-create/);
+    assert.match(main, /automode:account-store-auth-status/);
+    assert.match(main, /automode:account-store-connect/);
+    assert.match(main, /automode:account-store-activate/);
     assert.match(main, /automode:open-external-login/);
     assert.match(main, /auth\.openai\.com/);
     assert.match(main, /clipboard\.writeText\(code\)/);
