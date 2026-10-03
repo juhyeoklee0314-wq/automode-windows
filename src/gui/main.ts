@@ -298,6 +298,16 @@ function startGui(): void {
     ipcMain.handle("automode:set-scheduler", (_event, enabled: boolean) => service.setScheduler(Boolean(enabled)));
     ipcMain.handle("automode:set-login", (_event, enabled: boolean) => setRunAtLogin(Boolean(enabled)));
     ipcMain.handle("automode:new-account-profile", () => service.newAccountProfile());
+    ipcMain.handle("automode:account-stores", (_event, profileId: unknown) =>
+      service.getAccountStores(String(profileId ?? "")));
+    ipcMain.handle("automode:account-store-create", (_event, profileId: unknown) =>
+      service.createAccountStore(String(profileId ?? "")));
+    ipcMain.handle("automode:account-store-auth-status", (_event, profileId: unknown, storeId: unknown) =>
+      service.getAccountStoreAuthStatus(String(profileId ?? ""), String(storeId ?? "")));
+    ipcMain.handle("automode:account-store-connect", (_event, profileId: unknown, storeId: unknown) =>
+      service.connectAccountStore(String(profileId ?? ""), String(storeId ?? "")));
+    ipcMain.handle("automode:account-store-activate", (_event, profileId: unknown, storeId: unknown) =>
+      service.activateAccountStore(String(profileId ?? ""), String(storeId ?? "")));
     ipcMain.handle("automode:account-auth-status", (_event, accountId: unknown) =>
       service.getAccountAuthStatus(String(accountId ?? "")));
     ipcMain.handle("automode:account-connect", (_event, accountId: unknown) =>
