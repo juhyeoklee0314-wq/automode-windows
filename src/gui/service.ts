@@ -245,8 +245,10 @@ export class GuiService {
 
   getAccountStores(profileId: string): AccountStoreSummary[] {
     const preferences = loadPreferences(configmod.load());
+    const profile = preferences.profiles.find((entry) => entry.id === profileId);
     return preferences.accountStores
-      .filter((store) => store.profileId === profileId)
+      .filter((store) => store.profileId === profileId
+        && (store.bindingState !== "pending" || store.id === profile?.activeStoreId))
       .map((store) => accountStoreSummary(preferences, profileId, store.id))
       .filter((entry): entry is AccountStoreSummary => entry !== null)
       .sort((a, b) => Number(b.active) - Number(a.active)
