@@ -6,6 +6,32 @@ import { describe, it } from "node:test";
 describe("R1.07 active-store runtime gates", () => {
   const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
+  it("serializes account-store verification so parallel profile checks cannot overwrite newer bindings", () => {
+    const runtime = source("src/gui/account-store-runtime.ts");
+    const lockAt = runtime.indexOf("async function withVerificationLock");
+    const unlockedAt = runtime.indexOf("async function verifyAccountStoreUnlocked");
+    const publicAt = runtime.indexOf("export async function verifyAccountStore");
+    assert.ok(lockAt >= 0);
+    assert.ok(unlockedAt > lockAt);
+    assert.ok(publicAt > unlockedAt);
+    assert.match(runtime.slice(publicAt), /withVerificationLock\(\(\) => verifyAccountStoreUnlocked\(profileId, storeId\)\)/);
+  });
+
+  it("rebases Save changes onto fresh canonical store state instead of stale renderer preferences", () => {
+    const service = source("src/gui/service.ts");
+    const saveAt = service.indexOf("save(payload: SavePayload)");
+    const configSaveAt = service.indexOf("configmod.save(payload.config)", saveAt);
+    const reloadAt = service.indexOf("const canonicalPreferences = loadPreferences", configSaveAt);
+    const accountsAt = service.indexOf("canonicalPreferences.accounts = payload.preferences.accounts", reloadAt);
+    const persistAt = service.indexOf("savePreferences(canonicalPreferences)", accountsAt);
+    assert.ok(saveAt >= 0);
+    assert.ok(configSaveAt > saveAt);
+    assert.ok(reloadAt > configSaveAt);
+    assert.ok(accountsAt > reloadAt);
+    assert.ok(persistAt > accountsAt);
+    assert.doesNotMatch(service.slice(configSaveAt, persistAt), /savePreferences\(payload\.preferences\)/);
+  });
+
   it("audits migrated rollout creators read-only before binding a store", () => {
     const runtime = source("src/gui/account-store-runtime.ts");
     const discovery = source("src/gui/codex-task-discovery.ts");
