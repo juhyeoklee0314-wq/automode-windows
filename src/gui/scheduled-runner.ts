@@ -30,6 +30,21 @@ function dateKey(now: Date, timezone: string): string {
   return `${wall.year}-${pad(wall.month)}-${pad(wall.day)}`;
 }
 
+export function scheduledPingIdentity(
+  account: Pick<AccountProfile, "id" | "agent" | "storeId">,
+  scheduledReference: Date,
+  timezone: string,
+  scheduleId: string,
+): string {
+  if (account.agent === "codex" && !account.storeId) {
+    throw new Error("Scheduled Codex ping requires an exact account store identity.");
+  }
+  const executionOwner = account.agent === "codex"
+    ? `${account.id}-${account.storeId}`
+    : account.id;
+  return `${executionOwner}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
+}
+
 function elapsedMinutes(hour: number, minute: number, scheduledHour: number, scheduledMinute: number): number {
   let elapsed = hour * 60 + minute - (scheduledHour * 60 + scheduledMinute);
   if (elapsed < 0) elapsed += 24 * 60;
@@ -223,7 +238,7 @@ export async function runScheduled(
   });
 
   const scheduledReference = new Date(now.getTime() - elapsed * 60_000);
-  const identity = `${account.id}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
+  const identity = scheduledPingIdentity(account, scheduledReference, timezone, scheduleId);
   const state = new State();
 
   if (state.pingFired(identity)) {

@@ -3,8 +3,50 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
+import { scheduledPingIdentity } from "../src/gui/scheduled-runner.js";
+
 describe("R1.07 account switch transaction", () => {
   const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+
+  it("scopes scheduled-ping dedupe and execution locks to the exact account store", () => {
+    const reference = new Date("2026-10-03T06:00:00.000Z");
+    const a = scheduledPingIdentity(
+      { id: "main", agent: "codex", storeId: "store-main-a" },
+      reference,
+      "UTC",
+      "0600-0",
+    );
+    const b = scheduledPingIdentity(
+      { id: "main", agent: "codex", storeId: "store-main-b" },
+      reference,
+      "UTC",
+      "0600-0",
+    );
+    assert.notEqual(a, b);
+    assert.match(a, /main-store-main-a-2026-10-03-0600-0$/);
+    assert.match(b, /main-store-main-b-2026-10-03-0600-0$/);
+  });
+
+  it("preserves the legacy profile-scoped dedupe key for non-Codex automation", () => {
+    assert.equal(
+      scheduledPingIdentity(
+        { id: "claude-profile", agent: "claude", storeId: null },
+        new Date("2026-10-03T06:00:00.000Z"),
+        "UTC",
+        "0600-0",
+      ),
+      "claude-profile-2026-10-03-0600-0",
+    );
+  });
+
+  it("fails closed if a Codex scheduled ping somehow reaches identity creation without a store", () => {
+    assert.throws(() => scheduledPingIdentity(
+      { id: "main", agent: "codex", storeId: null },
+      new Date("2026-10-03T06:00:00.000Z"),
+      "UTC",
+      "0600-0",
+    ), /exact account store identity/);
+  });
 
   it("verifies the selected store before committing activeStoreId", () => {
     const service = source("src/gui/service.ts");
