@@ -105,9 +105,11 @@ describe("one-shot task resume scheduler", () => {
 describe("task resume wiring safety", () => {
   const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
-  it("keeps legacy/global rows non-resumable in the renderer", () => {
+  it("keeps hidden legacy/global rows outside normal resume controls", () => {
     const renderer = source("src/gui/renderer/app.js");
-    assert.match(renderer, /Cross-account unavailable/);
+    assert.match(renderer, /const userVisibleItems = data\.items\.filter\(\(item\) => item\.source === ['"]account['"]\)/);
+    assert.doesNotMatch(renderer, /Cross-account unavailable/);
+    assert.doesNotMatch(renderer, /LEGACY \/ GLOBAL/);
     assert.match(renderer, /resumeEligibility === ['"]same_profile_candidate['"]/);
     assert.match(renderer, /getAccountRateLimitStatus/);
     assert.match(renderer, /scheduleTaskResume/);

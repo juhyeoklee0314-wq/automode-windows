@@ -49,7 +49,7 @@
           <div class="card-title task-card-title">
             <div>
               <h3>Codex tasks</h3>
-              <p>Tasks are read from each profile's active ChatGPT account store plus the legacy global Codex store. Discovery is read-only.</p>
+              <p>Tasks are shown only from each profile's active verified ChatGPT account store. Discovery is read-only.</p>
             </div>
             <div class="task-toolbar">
               <input id="task-search" class="task-search" type="search" maxlength="160" placeholder="Search tasks" aria-label="Search tasks">
@@ -67,7 +67,7 @@
         </article>
         <article class="card note">
           <h3>Resume compatibility</h3>
-          <p>Tasks inside the active verified account store are candidates for same-profile resume. Legacy / Global tasks are shown for discovery only because current Codex local storage cannot safely resume a paginated global task through a different isolated account store.</p>
+          <p>Tasks inside the active verified account store are candidates for same-profile resume. Resume and scheduling remain bound to that exact profile and account store.</p>
         </article>
       </section>
 

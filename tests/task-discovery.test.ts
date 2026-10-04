@@ -201,9 +201,9 @@ describe("task discovery safety boundary", () => {
 
     assert.match(html, /data-page="tasks"/);
     assert.match(html, /id="codex-task-list"/);
-    assert.match(html, /Legacy \/ Global/);
+    assert.doesNotMatch(html, /Legacy \/ Global|legacy global Codex store/i);
+    assert.match(html, /active verified ChatGPT account store/);
     assert.match(renderer, /getTaskInventory\(\)/);
-    assert.match(renderer, /Cross-account unavailable/);
     assert.match(preload, /automode:get-task-inventory/);
     assert.match(main, /automode:get-task-inventory/);
   });
@@ -217,7 +217,8 @@ describe("task discovery safety boundary", () => {
     assert.match(html, /id="task-search"/);
     assert.match(renderer, /taskAccountFilter/);
     assert.match(renderer, /addTab\('all', 'All'/);
-    assert.match(renderer, /addTab\('legacy', 'Legacy'/);
+    assert.doesNotMatch(renderer, /addTab\('legacy', 'Legacy'/);
+    assert.doesNotMatch(renderer, /legacyCount|legacy task/);
     assert.match(renderer, /window\.automode\.resumeTask\(item\.accountId, item\.id, item\.updatedAt\)/);
     assert.match(renderer, /window\.automode\.scheduleTaskResume\(\s*item\.accountId,/);
     assert.doesNotMatch(renderer, /resumeTask\(taskAccountFilter/);
@@ -288,10 +289,16 @@ describe("task discovery safety boundary", () => {
 
   it("sorts and filters task inventory locally without reclassifying ownership", () => {
     const renderer = source("src/gui/renderer/app.js");
+    const visibleAt = renderer.indexOf("const userVisibleItems = data.items.filter((item) => item.source === 'account')");
+    const searchAt = renderer.indexOf(".filter(taskMatchesSearch)", visibleAt);
+    const renderAt = renderer.indexOf("filteredItems.forEach((item)", searchAt);
+    assert.ok(visibleAt >= 0);
+    assert.ok(searchAt > visibleAt);
+    assert.ok(renderAt > searchAt);
     assert.match(renderer, /\.filter\(taskMatchesFilter\)/);
     assert.match(renderer, /\.filter\(taskMatchesSearch\)/);
     assert.match(renderer, /\.sort\(\(a, b\) => taskTimestamp\(b\) - taskTimestamp\(a\)\)/);
-    assert.match(renderer, /item\.source === 'legacy_global'/);
+    assert.match(renderer, /if \(item\.source !== 'account'\) return false;/);
     assert.match(renderer, /item\.accountId === taskAccountFilter/);
     assert.match(renderer, /SCHEDULED/);
     assert.match(renderer, /RUNNING/);
@@ -301,5 +308,25 @@ describe("task discovery safety boundary", () => {
     assert.match(renderer, /OWNERSHIP UNVERIFIED/);
     assert.match(renderer, /Reconnect matching account/);
     assert.match(renderer, /Connected:/);
+  });
+
+  it("hides Legacy inventory from normal Tasks tabs, All, search, summary, and rows", () => {
+    const html = source("src/gui/renderer/index.html");
+    const renderer = source("src/gui/renderer/app.js");
+    const discovery = source("src/gui/codex-task-discovery.ts");
+
+    assert.doesNotMatch(html, /Legacy \/ Global|legacy global Codex store/i);
+    assert.doesNotMatch(renderer, /addTab\('legacy'|legacyCount|legacy task|LEGACY \/ GLOBAL/);
+    assert.match(renderer, /total: \(data\.items \|\| \[\]\)\.filter\(\(item\) => item\.source === 'account'\)\.length/);
+    assert.match(renderer, /const userVisibleItems = data\.items\.filter\(\(item\) => item\.source === 'account'\)/);
+    assert.match(renderer, /const userVisibleErrors = data\.errors\.filter\(\(entry\) => entry\.source === 'account'\)/);
+    assert.match(renderer, /function taskMatchesSearch\(item\) \{\s*if \(item\.source !== 'account'\) return false;/);
+    assert.match(renderer, /ownership\.textContent = 'PROFILE TASK'/);
+
+    // Backend discovery and read-only Legacy evidence remain intact.
+    assert.match(discovery, /source: "legacy_global"/);
+    assert.match(discovery, /classifyTaskOwnership/);
+    assert.match(discovery, /readRolloutCreatorAccountIds/);
+    assert.match(discovery, /useStateDbOnly:\s*true/);
   });
 });

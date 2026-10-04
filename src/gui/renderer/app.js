@@ -776,8 +776,7 @@ function taskFilterOptions(data) {
 
   return {
     accounts: configured,
-    legacyCount: (data.items || []).filter((item) => item.source === 'legacy_global').length,
-    total: (data.items || []).length,
+    total: (data.items || []).filter((item) => item.source === 'account').length,
   };
 }
 
@@ -785,16 +784,15 @@ function renderTaskAccountTabs(data) {
   const root = $('task-account-tabs');
   if (!root) return;
   const options = taskFilterOptions(data);
-  const validFilters = new Set(['all', 'legacy', ...options.accounts.map((account) => account.id)]);
+  const validFilters = new Set(['all', ...options.accounts.map((account) => account.id)]);
   if (!validFilters.has(taskAccountFilter)) taskAccountFilter = 'all';
 
   root.replaceChildren();
 
-  const addTab = (id, label, count, legacy = false) => {
+  const addTab = (id, label, count) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'task-account-tab'
-      + (legacy ? ' legacy-tab' : '')
       + (taskAccountFilter === id ? ' active' : '');
     button.dataset.taskFilter = id;
     button.setAttribute('role', 'tab');
@@ -817,11 +815,10 @@ function renderTaskAccountTabs(data) {
 
   addTab('all', 'All', options.total);
   options.accounts.forEach((account) => addTab(account.id, account.label, account.count));
-  addTab('legacy', 'Legacy', options.legacyCount, true);
 }
 
 function taskMatchesFilter(item) {
-  if (taskAccountFilter === 'legacy') return item.source === 'legacy_global';
+  if (item.source !== 'account') return false;
   if (taskAccountFilter !== 'all') return item.source === 'account' && item.accountId === taskAccountFilter;
   return true;
 }
@@ -832,6 +829,7 @@ function inventoryAccountState(accountId) {
 }
 
 function taskMatchesSearch(item) {
+  if (item.source !== 'account') return false;
   const query = taskSearchQuery.trim().toLowerCase();
   if (!query) return true;
   const accountState = inventoryAccountState(item.accountId);
@@ -859,7 +857,6 @@ function activeTaskSchedule(item) {
 }
 
 function taskState(item) {
-  if (item.source === 'legacy_global') return { label: 'LEGACY', className: '' };
   if (item.ownershipStatus === 'mismatch') {
     return {
       label: 'ACCOUNT MISMATCH',
@@ -908,7 +905,6 @@ function renderTaskResumeSchedules(schedules) {
   );
   const filtered = (schedules || []).filter((schedule) => {
     if (activeStoreByProfile.get(schedule.accountId) !== schedule.storeId) return false;
-    if (taskAccountFilter === 'legacy') return false;
     if (taskAccountFilter === 'all') return true;
     return schedule.accountId === taskAccountFilter;
   });
@@ -1044,26 +1040,24 @@ function renderTaskInventory(data) {
   const summary = $('task-inventory-summary');
   root.replaceChildren();
 
-  const accountCount = data.items.filter((item) => item.source === 'account').length;
-  const legacyCount = data.items.filter((item) => item.source === 'legacy_global').length;
-  const errorCount = data.errors.length;
-  const filteredItems = data.items
+  const userVisibleItems = data.items.filter((item) => item.source === 'account');
+  const accountCount = userVisibleItems.length;
+  const userVisibleErrors = data.errors.filter((entry) => entry.source === 'account');
+  const errorCount = userVisibleErrors.length;
+  const filteredItems = userVisibleItems
     .filter(taskMatchesFilter)
     .filter(taskMatchesSearch)
     .slice()
     .sort((a, b) => taskTimestamp(b) - taskTimestamp(a));
 
   let filterLabel = null;
-  if (taskAccountFilter === 'legacy') {
-    filterLabel = 'Legacy';
-  } else if (taskAccountFilter !== 'all') {
+  if (taskAccountFilter !== 'all') {
     filterLabel = (snapshot?.preferences?.accounts || [])
       .find((account) => account.id === taskAccountFilter)?.displayName || taskAccountFilter;
   }
 
   summary.textContent = [
     accountCount + ' account task' + (accountCount === 1 ? '' : 's'),
-    legacyCount + ' legacy task' + (legacyCount === 1 ? '' : 's'),
     filterLabel
       ? 'showing ' + filteredItems.length + ' for ' + filterLabel
       : (taskSearchQuery ? 'showing ' + filteredItems.length + ' matches' : null),
@@ -1073,7 +1067,7 @@ function renderTaskInventory(data) {
   if (!filteredItems.length) {
     const empty = document.createElement('p');
     empty.className = 'muted';
-    empty.textContent = data.items.length
+    empty.textContent = userVisibleItems.length
       ? 'No tasks match the current account filter or search.'
       : errorCount
         ? 'No tasks could be loaded from the available Codex stores.'
@@ -1083,9 +1077,7 @@ function renderTaskInventory(data) {
 
   filteredItems.forEach((item) => {
     const row = document.createElement('div');
-    const ownershipClass = item.source === 'legacy_global'
-      ? 'legacy'
-      : item.ownershipStatus === 'mismatch'
+    const ownershipClass = item.ownershipStatus === 'mismatch'
         ? 'mismatch'
         : item.ownershipStatus === 'matched'
           ? 'owned'
@@ -1098,12 +1090,10 @@ function renderTaskInventory(data) {
     title.textContent = item.title;
     const meta = document.createElement('small');
     const accountState = inventoryAccountState(item.accountId);
-    const connectedLabel = item.source === 'account'
-      ? (accountState?.connectedEmail
-        || (accountState?.identityVerified ? 'Connected account verified' : 'Connected identity unavailable'))
-      : null;
+    const connectedLabel = accountState?.connectedEmail
+      || (accountState?.identityVerified ? 'Connected account verified' : 'Connected identity unavailable');
     meta.textContent = [
-      item.source === 'account' ? 'Stored in ' + item.accountLabel : item.accountLabel,
+      'Stored in ' + item.accountLabel,
       connectedLabel ? 'Connected: ' + connectedLabel : null,
       item.model,
       item.sessionSource,
@@ -1118,8 +1108,8 @@ function renderTaskInventory(data) {
     actions.className = 'codex-task-actions';
 
     const ownership = document.createElement('span');
-    ownership.className = 'badge ' + (item.source === 'account' ? 'profile' : '');
-    ownership.textContent = item.source === 'account' ? 'PROFILE TASK' : 'LEGACY / GLOBAL';
+    ownership.className = 'badge profile';
+    ownership.textContent = 'PROFILE TASK';
 
     const operational = taskState(item);
     const operationalBadge = document.createElement('span');
@@ -1166,8 +1156,8 @@ function renderTaskInventory(data) {
         disabled.textContent = 'Ownership unverified';
         disabled.title = 'PingGPT could not verify task ownership, so resume and scheduling are disabled.';
       } else {
-        disabled.textContent = 'Cross-account unavailable';
-        disabled.title = 'Legacy / Global tasks cannot be resumed through an isolated account store.';
+        disabled.textContent = 'Task unavailable';
+        disabled.title = 'This task is not eligible for resume or scheduling.';
       }
       actions.append(disabled);
     }
@@ -1176,10 +1166,8 @@ function renderTaskInventory(data) {
     root.append(row);
   });
 
-  data.errors
-    .filter((entry) => taskAccountFilter === 'all'
-      || (taskAccountFilter === 'legacy' && entry.source === 'legacy_global')
-      || entry.accountId === taskAccountFilter)
+  userVisibleErrors
+    .filter((entry) => taskAccountFilter === 'all' || entry.accountId === taskAccountFilter)
     .forEach((entry) => {
       const error = document.createElement('div');
       error.className = 'task-source-error';
