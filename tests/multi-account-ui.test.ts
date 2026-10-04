@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test";
 
 import { DEFAULTS } from "../src/core/config.js";
 import { classifyCodexLoginStatus, deviceLoginPendingStatus, parseCodexAccountIdentity, parseCodexDeviceLoginPrompt } from "../src/gui/account-auth.js";
-import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath } from "../src/gui/preferences.js";
+import { codexProfilesRoot, loadPreferences, newAccountProfile, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { accountCatchupMinutes } from "../src/gui/scheduled-runner.js";
 import { WindowsScheduler } from "../src/gui/scheduler.js";
 
@@ -110,6 +110,20 @@ describe("multi-account profile persistence", () => {
     assert.equal(loaded.accounts[0]?.catchupMinutes, DEFAULTS.ping.catchup_minutes);
     assert.equal(loaded.accounts[0]?.wakePc, false);
     assert.equal(loaded.accounts[0]?.codexHome, join(codexProfilesRoot(), "default"));
+    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.profiles[0]?.activeStoreId, "store-default-legacy");
+    assert.equal(loaded.accountStores[0]?.bindingState, "migration_pending");
+    assert.equal(loaded.accountStores[0]?.codexHome, join(codexProfilesRoot(), "default"));
+  });
+
+  it("persists schema v2 without writing the runtime accounts projection", () => {
+    const loaded = loadPreferences(DEFAULTS);
+    savePreferences(loaded);
+    const raw = JSON.parse(readFileSync(preferencesPath(), "utf8")) as Record<string, unknown>;
+    assert.equal(raw.schemaVersion, 2);
+    assert.ok(Array.isArray(raw.profiles));
+    assert.ok(Array.isArray(raw.accountStores));
+    assert.equal("accounts" in raw, false);
   });
 
   it("creates independent Codex homes and safe unique profile ids", () => {
@@ -150,10 +164,12 @@ describe("multi-account scheduler reconciliation", () => {
     const accountA = {
       id: "account-a", displayName: "A", enabled: true, message: "hi",
       schedules: ["06:00"], agent: "codex" as const, catchupMinutes: 10,
+      codexHome: "C:\\PingGPT\\account-a", storeId: "store-account-a", storeBindingState: "bound" as const,
     };
     const accountB = {
       id: "account-b", displayName: "B", enabled: true, message: "hi",
       schedules: ["07:00"], agent: "codex" as const, catchupMinutes: 20,
+      codexHome: "C:\\PingGPT\\account-b", storeId: "store-account-b", storeBindingState: "bound" as const,
     };
     scheduler.install([accountA, accountB]);
     calls.length = 0;
@@ -169,10 +185,12 @@ describe("multi-account scheduler reconciliation", () => {
     const accountA = {
       id: "account-a", displayName: "A", enabled: true, message: "hi",
       schedules: ["06:00"], agent: "codex" as const, catchupMinutes: 10,
+      codexHome: "C:\\PingGPT\\account-a", storeId: "store-account-a", storeBindingState: "bound" as const,
     };
     const accountB = {
       id: "account-b", displayName: "B", enabled: true, message: "hi",
       schedules: ["07:00"], agent: "codex" as const, catchupMinutes: 20,
+      codexHome: "C:\\PingGPT\\account-b", storeId: "store-account-b", storeBindingState: "bound" as const,
     };
     const installScheduler = new WindowsScheduler("C:\\PingGPT\\PingGPT.exe", () => ({ ok: true, output: "Ready" }), receipt);
     installScheduler.install([accountA, accountB]);
@@ -194,12 +212,14 @@ describe("multi-account scheduler reconciliation", () => {
       return { ok: true, output: "Ready" };
     }, receipt);
     scheduler.install([
-      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
-      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
+      { id: "profile-a", displayName: "A", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true, codexHome: "C:\\PingGPT\\a", storeId: "store-a", storeBindingState: "bound" as const },
+      { id: "profile-a-long", displayName: "B", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false, codexHome: "C:\\PingGPT\\b", storeId: "store-b", storeBindingState: "bound" as const },
     ]);
     assert.equal(actions.length, 2);
     assert.match(actions[0] ?? "", /"profile-a"/);
+    assert.match(actions[0] ?? "", /"store-a"/);
     assert.match(actions[1] ?? "", /"profile-a-long"/);
+    assert.match(actions[1] ?? "", /"store-b"/);
   });
 
   it("configures wake only for selected profiles and keeps every task AC-only", () => {
@@ -210,8 +230,8 @@ describe("multi-account scheduler reconciliation", () => {
       return { ok: true, output: "Ready" };
     }, receipt);
     scheduler.install([
-      { id: "wake", displayName: "Wake", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true },
-      { id: "no-wake", displayName: "No Wake", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false },
+      { id: "wake", displayName: "Wake", enabled: true, message: "hi", schedules: ["06:00"], agent: "codex" as const, wakePc: true, codexHome: "C:\\PingGPT\\wake", storeId: "store-wake", storeBindingState: "bound" as const },
+      { id: "no-wake", displayName: "No Wake", enabled: true, message: "hi", schedules: ["07:00"], agent: "codex" as const, wakePc: false, codexHome: "C:\\PingGPT\\no-wake", storeId: "store-no-wake", storeBindingState: "bound" as const },
     ]);
     const powerCalls = calls.filter((args) => args[0] === "@ConfigurePower");
     assert.equal(powerCalls.length, 2);
@@ -230,9 +250,13 @@ describe("multi-account GUI wiring", () => {
     assert.doesNotMatch(html, /id="ping-agent"|id="ping-message"|id="catchup"/);
     assert.match(app, /newAccountProfile\(\)/);
     assert.match(app, /readAccounts\(\)/);
-    assert.match(app, /connectAccount\(accountId\)/);
+    assert.match(app, /toggleAccountManager\(card\)/);
+    assert.match(app, /getAccountStores\(profileId\)/);
+    assert.match(app, /createAccountStore\(profileId\)/);
+    assert.match(app, /activateAccountStore\(profileId, storeId\)/);
     assert.match(app, /account-auth-identity/);
     assert.match(app, /Identity verified by Codex/);
+    assert.match(app, /Manage account/);
   });
 
   it("wires account creation and login through sandboxed IPC", () => {
@@ -241,11 +265,21 @@ describe("multi-account GUI wiring", () => {
     assert.match(preload, /automode:new-account-profile/);
     assert.match(preload, /automode:account-auth-status/);
     assert.match(preload, /automode:account-connect/);
+    assert.match(preload, /automode:account-stores/);
+    assert.match(preload, /automode:account-store-create/);
+    assert.match(preload, /automode:account-store-auth-status/);
+    assert.match(preload, /automode:account-store-connect/);
+    assert.match(preload, /automode:account-store-activate/);
     assert.match(preload, /automode:open-external-login/);
     assert.match(preload, /url: string, code: string/);
     assert.match(main, /automode:new-account-profile/);
     assert.match(main, /automode:account-auth-status/);
     assert.match(main, /automode:account-connect/);
+    assert.match(main, /automode:account-stores/);
+    assert.match(main, /automode:account-store-create/);
+    assert.match(main, /automode:account-store-auth-status/);
+    assert.match(main, /automode:account-store-connect/);
+    assert.match(main, /automode:account-store-activate/);
     assert.match(main, /automode:open-external-login/);
     assert.match(main, /auth\.openai\.com/);
     assert.match(main, /clipboard\.writeText\(code\)/);

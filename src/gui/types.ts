@@ -10,9 +10,57 @@ export interface AccountProfile {
   agent: "claude" | "codex";
   catchupMinutes?: number;
   wakePc?: boolean;
+  /** R1.07 active account-store metadata. */
+  storeId?: string | null;
+  storeIdentityKey?: string | null;
+  storeBindingState?: AccountStoreBindingState | null;
 }
 
-export type AccountAuthState = "connected" | "wrong_auth" | "not_connected" | "cli_missing" | "not_codex" | "login_started" | "profile_missing";
+export interface AutomationSettings {
+  message: string;
+  schedules: string[];
+  catchupMinutes?: number;
+  wakePc?: boolean;
+}
+
+export type AccountStoreBindingState =
+  | "pending"
+  | "bound"
+  | "migration_pending"
+  | "migration_review";
+
+export interface LocalProfile {
+  id: string;
+  displayName: string;
+  enabled: boolean;
+  agent: "claude" | "codex";
+  activeStoreId: string | null;
+  automation: AutomationSettings;
+}
+
+export interface AccountStore {
+  id: string;
+  profileId: string;
+  codexHome: string;
+  identityKey: string | null;
+  bindingState: AccountStoreBindingState;
+  lastKnownEmail?: string | null;
+  planType?: string | null;
+  automation: AutomationSettings;
+}
+
+export type AccountAuthState =
+  | "connected"
+  | "wrong_auth"
+  | "not_connected"
+  | "cli_missing"
+  | "not_codex"
+  | "login_started"
+  | "profile_missing"
+  | "account_unverified"
+  | "account_mismatch"
+  | "account_already_stored"
+  | "migration_review";
 
 export interface AccountAuthStatus {
   accountId: string;
@@ -21,13 +69,27 @@ export interface AccountAuthStatus {
   email?: string | null;
   planType?: string | null;
   identityVerified?: boolean;
+  storeId?: string | null;
+  existingStoreId?: string | null;
   loginUrl?: string;
   loginCode?: string;
 }
 
+export interface AccountStoreSummary {
+  profileId: string;
+  storeId: string;
+  active: boolean;
+  bindingState: AccountStoreBindingState;
+  email: string | null;
+  planType: string | null;
+}
+
 export interface TaskResumeSchedule {
   id: string;
+  /** Local profile id; retained as accountId for renderer/API compatibility in R1.07. */
   accountId: string;
+  /** Exact account store that owns the task. */
+  storeId: string;
   threadId: string;
   title: string;
   runAt: string;
@@ -40,9 +102,12 @@ export interface TaskResumeSchedule {
 }
 
 export interface GuiPreferences {
-  schemaVersion: 1;
+  schemaVersion: 2;
   runAtLogin: boolean;
   schedulerEnabled: boolean;
+  profiles: LocalProfile[];
+  accountStores: AccountStore[];
+  /** Runtime compatibility projection: one active store per local profile. Not persisted in schema v2. */
   accounts: AccountProfile[];
   taskResumeSchedules: TaskResumeSchedule[];
 }
@@ -176,6 +241,11 @@ export interface AutomodeApi {
   setScheduler(enabled: boolean): Promise<AppSnapshot>;
   setRunAtLogin(enabled: boolean): Promise<AppSnapshot>;
   newAccountProfile(): Promise<AccountProfile>;
+  getAccountStores(profileId: string): Promise<AccountStoreSummary[]>;
+  createAccountStore(profileId: string): Promise<AccountStoreSummary>;
+  getAccountStoreAuthStatus(profileId: string, storeId: string): Promise<AccountAuthStatus>;
+  connectAccountStore(profileId: string, storeId: string): Promise<AccountAuthStatus>;
+  activateAccountStore(profileId: string, storeId: string): Promise<AppSnapshot>;
   getAccountAuthStatus(accountId: string): Promise<AccountAuthStatus>;
   connectAccount(accountId: string): Promise<AccountAuthStatus>;
   openExternalLogin(url: string, code: string): Promise<boolean>;

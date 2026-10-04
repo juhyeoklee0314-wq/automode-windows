@@ -6,6 +6,7 @@ import { acquireExecutionLock, activeExecutionLockCount, leaseIsLive } from "./l
 import { loadPreferences } from "./preferences.js";
 import { recentlyResumedFromSuspend } from "./power-state.js";
 import { reliablePing } from "./reliable-ping.js";
+import { ensureActiveAccountStore } from "./account-store-runtime.js";
 import { which } from "../platform/command.js";
 import type { DiagnosticTrace } from "./diagnostics.js";
 import type { AccountProfile, GuiPreferences } from "./types.js";
@@ -27,6 +28,21 @@ function dateKey(now: Date, timezone: string): string {
   const wall = wallClockAt(now, timezone);
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${wall.year}-${pad(wall.month)}-${pad(wall.day)}`;
+}
+
+export function scheduledPingIdentity(
+  account: Pick<AccountProfile, "id" | "agent" | "storeId">,
+  scheduledReference: Date,
+  timezone: string,
+  scheduleId: string,
+): string {
+  if (account.agent === "codex" && !account.storeId) {
+    throw new Error("Scheduled Codex ping requires an exact account store identity.");
+  }
+  const executionOwner = account.agent === "codex"
+    ? `${account.id}-${account.storeId}`
+    : account.id;
+  return `${executionOwner}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
 }
 
 function elapsedMinutes(hour: number, minute: number, scheduledHour: number, scheduledMinute: number): number {
@@ -66,6 +82,11 @@ function wakeBatchDue(
 ): boolean {
   for (const candidate of preferences.accounts) {
     if (!candidate.enabled || candidate.wakePc !== true) continue;
+    if (candidate.agent === "codex" && (
+      !candidate.codexHome
+      || candidate.storeBindingState === "pending"
+      || candidate.storeBindingState === "migration_review"
+    )) continue;
     const limit = Math.min(accountCatchupMinutes(candidate, config), WAKE_CORRELATION_MINUTES);
     for (const time of candidate.schedules) {
       const elapsed = elapsedMinutesForSchedule(now, timezone, time);
@@ -140,6 +161,7 @@ export async function runScheduled(
   now = new Date(),
   trace?: DiagnosticTrace,
   runtime: ScheduledRuntime = {},
+  expectedStoreId?: string | null,
 ): Promise<number> {
   const log = createLogger();
   trace?.emit("PING_01_RUNNER_ENTER", "scheduled", { accountId, scheduleId });
@@ -148,8 +170,28 @@ export async function runScheduled(
   const preferences = loadPreferences(config);
   if (!preferences.schedulerEnabled) return 75;
 
-  const account = preferences.accounts.find((entry) => entry.id === accountId && entry.enabled);
+  let account = preferences.accounts.find((entry) => entry.id === accountId && entry.enabled);
   if (!account) return 64;
+
+  if (account.agent === "codex") {
+    if (expectedStoreId !== undefined
+      && (!expectedStoreId || expectedStoreId === "-" || account.storeId !== expectedStoreId)) {
+      trace?.emit("PING_ACCOUNT_STORE_STALE_TASK_REJECTED", "scheduled", {
+        accountId,
+        expectedStoreId,
+        activeStoreId: account.storeId ?? null,
+      });
+      log("scheduled ping refused: Windows task account store does not match the active profile store");
+      return 75;
+    }
+    const verified = await ensureActiveAccountStore(accountId);
+    if (verified.state !== "ready" || !verified.account) {
+      trace?.emit("PING_ACCOUNT_STORE_REJECTED", "scheduled", { accountId, state: verified.state });
+      log(`scheduled ping refused: ${verified.detail}`);
+      return 75;
+    }
+    account = verified.account;
+  }
 
   const index = Number(scheduleId.split("-").at(-1));
   const time = account.schedules[index];
@@ -196,7 +238,7 @@ export async function runScheduled(
   });
 
   const scheduledReference = new Date(now.getTime() - elapsed * 60_000);
-  const identity = `${account.id}-${dateKey(scheduledReference, timezone)}-${scheduleId}`;
+  const identity = scheduledPingIdentity(account, scheduledReference, timezone, scheduleId);
   const state = new State();
 
   if (state.pingFired(identity)) {
@@ -253,6 +295,7 @@ export async function runScheduledDryRun(
   scheduleId: string,
   now = new Date(),
   trace?: DiagnosticTrace,
+  expectedStoreId?: string | null,
 ): Promise<number> {
   trace?.emit("PING_DRY_01_RUNNER_ENTER", "dry_run", { accountId, scheduleId });
   const config = configmod.load();
@@ -261,6 +304,15 @@ export async function runScheduledDryRun(
   if (!account) {
     trace?.emit("PING_DRY_02_ACCOUNT_REJECTED", "dry_run", { accountId });
     return 64;
+  }
+  if (account.agent === "codex" && expectedStoreId !== undefined
+    && (!expectedStoreId || expectedStoreId === "-" || account.storeId !== expectedStoreId)) {
+    trace?.emit("PING_DRY_STORE_REJECTED", "dry_run", {
+      accountId,
+      expectedStoreId,
+      activeStoreId: account.storeId ?? null,
+    });
+    return 75;
   }
   const index = Number(scheduleId.split("-").at(-1));
   const time = account.schedules[index];

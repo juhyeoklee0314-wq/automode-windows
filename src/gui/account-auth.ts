@@ -19,6 +19,10 @@ export interface CodexAccountIdentity {
   planType: string | null;
 }
 
+export interface CodexProviderIdentity extends CodexAccountIdentity {
+  providerAccountId: string | null;
+}
+
 export interface CodexDeviceLoginPrompt {
   loginUrl: string;
   loginCode: string;
@@ -130,19 +134,20 @@ async function runStatus(command: string, account: AccountProfile): Promise<Stat
   });
 }
 
-async function readCodexAccountIdentity(command: string, account: AccountProfile): Promise<CodexAccountIdentity | null> {
+export async function readCodexProviderIdentity(command: string, account: AccountProfile): Promise<CodexProviderIdentity | null> {
   const native = resolveCodexNativeExecutable(command);
   const prepared = native
     ? { command: native, args: ["app-server", "--listen", "stdio://"] }
     : prepareStdioSpawn(command, ["app-server", "--listen", "stdio://"]);
-  return await new Promise<CodexAccountIdentity | null>((resolve) => {
+  return await new Promise<CodexProviderIdentity | null>((resolve) => {
     let child: ReturnType<typeof spawn> | undefined;
     let timer: NodeJS.Timeout | null = null;
     let settled = false;
     let stdoutBuffer = "";
     let captured = 0;
+    let baseIdentity: CodexAccountIdentity | null = null;
 
-    const finish = (identity: CodexAccountIdentity | null) => {
+    const finish = (identity: CodexProviderIdentity | null) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
@@ -190,7 +195,26 @@ async function readCodexAccountIdentity(command: string, account: AccountProfile
 
       if (message.id === "pinggpt-account") {
         if (message.error) return finish(null);
-        return finish(parseCodexAccountIdentity(message.result));
+        baseIdentity = parseCodexAccountIdentity(message.result);
+        if (!baseIdentity) return finish(null);
+        send({
+          id: "pinggpt-account-limits",
+          method: "account/rateLimits/read",
+          params: { excludeResetCreditDetails: true },
+        });
+        return;
+      }
+
+      if (message.id === "pinggpt-account-limits") {
+        if (!baseIdentity) return finish(null);
+        const result = message.result && typeof message.result === "object"
+          ? message.result as Record<string, unknown>
+          : null;
+        const rawAccountId = typeof result?.accountId === "string" ? result.accountId.trim() : "";
+        return finish({
+          ...baseIdentity,
+          providerAccountId: rawAccountId || null,
+        });
       }
     };
 
@@ -265,7 +289,7 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
   const status = classifyCodexLoginStatus(account.id, result.code, result.output);
   if (status.state !== "connected") return status;
 
-  const identity = await readCodexAccountIdentity(resolved, account);
+  const identity = await readCodexProviderIdentity(resolved, account);
   if (!identity) {
     return {
       ...status,
@@ -278,7 +302,7 @@ export async function codexAuthStatus(account: AccountProfile): Promise<AccountA
     ...status,
     email: identity.email,
     planType: identity.planType,
-    identityVerified: true,
+    identityVerified: identity.providerAccountId !== null,
     detail: identity.email
       ? `Connected as ${identity.email}.`
       : "ChatGPT login is active; Codex did not provide an email address.",

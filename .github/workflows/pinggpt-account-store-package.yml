@@ -1,0 +1,242 @@
+name: PingGPT R1.07 Account Store Packaging
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pinggpt-account-store-r107-001
+
+concurrency:
+  group: pinggpt-r107-account-store-package-\${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact R1.07 branch
+        uses: actions/checkout@v4
+
+      - name: Assert R1.07 branch identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -ne 'refs/heads/pinggpt-account-store-r107-001') {
+            throw "R1.07 packaging must run only from pinggpt-account-store-r107-001. Actual=$env:GITHUB_REF"
+          }
+
+      - name: Set up Node 20.20.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+          cache: npm
+
+      - name: Install exact dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Test R1.07 branch
+        shell: pwsh
+        run: npm test
+
+      - name: Package NSIS diagnostic candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npx electron-builder --win nsis --x64 --publish never --config.directories.output=release-r107-nsis
+
+      - name: Verify NSIS candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = @(Get-ChildItem -LiteralPath 'release-r107-nsis' -File -Filter 'PingGPT-Windows-Setup-*.exe')
+          if ($setup.Count -ne 1) { throw "Expected exactly one PingGPT Setup EXE, found $($setup.Count)." }
+          $hash = Get-FileHash -LiteralPath $setup[0].FullName -Algorithm SHA256
+          @(
+            'REVISION=R1.07'
+            'BRANCH=pinggpt-account-store-r107-001'
+            "COMMIT=$env:GITHUB_SHA"
+            "PATH=$($setup[0].Name)"
+            "SIZE=$($setup[0].Length)"
+            "SHA256=$($hash.Hash.ToUpperInvariant())"
+            "AUTHENTICODE_STATUS=$((Get-AuthenticodeSignature -LiteralPath $setup[0].FullName).Status)"
+          ) | Set-Content -LiteralPath 'PingGPT_R1.07_NSIS_Manifest.txt' -Encoding UTF8
+
+      - name: Build code-only R1.07 runtime patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $PWD 'runtime-patch-r107'
+          $payload = Join-Path $root 'payload'
+          New-Item -ItemType Directory -Path $payload -Force | Out-Null
+          Copy-Item -LiteralPath 'dist' -Destination $payload -Recurse -Force
+          New-Item -ItemType Directory -Path (Join-Path $payload 'src\gui') -Force | Out-Null
+          Copy-Item -LiteralPath 'src\gui\renderer' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'src\gui\assets' -Destination (Join-Path $payload 'src\gui') -Recurse -Force
+          Copy-Item -LiteralPath 'package.json' -Destination $payload -Force
+
+          $manifest = Join-Path $root 'FILE_SHA256_MANIFEST.txt'
+          @(
+            'SCHEMA=pinggpt.runtime-patch.v1'
+            'REVISION=R1.07'
+            'BRANCH=pinggpt-account-store-r107-001'
+            "COMMIT=$env:GITHUB_SHA"
+            'MODE=CODE_ONLY_NO_EXECUTABLE'
+            'PAYLOAD_ROOT=payload'
+          ) | Set-Content -LiteralPath $manifest -Encoding UTF8
+
+          Get-ChildItem -LiteralPath $payload -File -Recurse |
+            Sort-Object FullName |
+            ForEach-Object {
+              $relative = [IO.Path]::GetRelativePath($payload, $_.FullName).Replace('\','/')
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+              "FILE=$relative|SIZE=$($_.Length)|SHA256=$hash" | Add-Content -LiteralPath $manifest -Encoding UTF8
+            }
+
+          $zip = Join-Path $PWD 'Working_ZIP_PingGPT_261003_AccountStore_R1.07_RuntimePatch.zip'
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -LiteralPath (Join-Path $root 'payload'), $manifest -DestinationPath $zip -CompressionLevel Optimal
+
+      - name: Build and verify frozen R1.07 DeliveryBundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtimeName = 'Working_ZIP_PingGPT_261003_AccountStore_R1.07_RuntimePatch.zip'
+          $applyName = 'RUN_PingGPT_261003_AccountStore_R1.07.ps1'
+          $rollbackName = 'ROLLBACK_PingGPT_261003_AccountStore_R1.07.ps1'
+          $manifestName = 'PingGPT_R1.07_DeliveryManifest.txt'
+          $bundleName = 'Working_ZIP_PingGPT_261003_AccountStore_R1.07_DeliveryBundle.zip'
+          $receiptName = 'PingGPT_R1.07_DeliveryReceipt.txt'
+          $project = 'PingGPT Account Store R1.07 Runtime Patch'
+
+          $runtimePath = Join-Path $PWD $runtimeName
+          if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) { throw "Runtime patch missing: $runtimeName" }
+          $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $runtimeManifest = Join-Path $PWD 'runtime-patch-r107\FILE_SHA256_MANIFEST.txt'
+          $manifestLines = @(Get-Content -LiteralPath $runtimeManifest -Encoding UTF8)
+          $payloadCount = @($manifestLines | Where-Object { $_ -like 'FILE=*' }).Count
+          if ($payloadCount -lt 1) { throw 'Runtime manifest contains no payload files.' }
+
+          $applyTemplate = Get-Content -LiteralPath 'scripts\pinggpt-r107-runtime-patch-apply.template.ps1' -Raw -Encoding UTF8
+          $applyText = $applyTemplate.Replace('@@PROJECT@@', $project)
+          $applyText = $applyText.Replace('@@EXPECTED_COMMIT@@', $env:GITHUB_SHA)
+          $applyText = $applyText.Replace('@@EXPECTED_ZIP_HASH@@', $runtimeHash)
+          $applyText = $applyText.Replace('@@EXPECTED_FILE_COUNT@@', [string]$payloadCount)
+          $applyText = $applyText.Replace('@@PATCH_FILENAME@@', $runtimeName)
+          $applyText = $applyText.Replace('@@ROLLBACK_FILENAME@@', $rollbackName)
+          $applyText = $applyText.Replace('@@BACKUP_TAG@@', 'PingGPT_PreR107_Backup')
+          $applyText = $applyText.Replace('@@TEMP_TAG@@', 'PingGPT_R107')
+
+          $rollbackTemplate = Get-Content -LiteralPath 'scripts\pinggpt-r107-rollback.template.ps1' -Raw -Encoding UTF8
+          $rollbackText = $rollbackTemplate.Replace('@@PROJECT@@', $project)
+          $rollbackText = $rollbackText.Replace('@@EXPECTED_COMMIT@@', $env:GITHUB_SHA)
+
+          if ($applyText -match '@@[A-Z0-9_]+@@') { throw "Unresolved apply-script template token: $($Matches[0])" }
+          if ($rollbackText -match '@@[A-Z0-9_]+@@') { throw "Unresolved rollback-script template token: $($Matches[0])" }
+
+          $deliveryRoot = Join-Path $PWD 'delivery-r107'
+          if (Test-Path -LiteralPath $deliveryRoot) { Remove-Item -LiteralPath $deliveryRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $deliveryRoot -Force | Out-Null
+          $applyPath = Join-Path $deliveryRoot $applyName
+          $rollbackPath = Join-Path $deliveryRoot $rollbackName
+          $deliveryManifestPath = Join-Path $deliveryRoot $manifestName
+          $applyText | Set-Content -LiteralPath $applyPath -Encoding UTF8
+          $rollbackText | Set-Content -LiteralPath $rollbackPath -Encoding UTF8
+
+          foreach ($scriptPath in @($applyPath, $rollbackPath)) {
+            $escaped = $scriptPath.Replace("'", "''")
+            $parseCommand = '$tokens=$null;$parseErrors=$null;[System.Management.Automation.Language.Parser]::ParseFile(''' + $escaped + ''',[ref]$tokens,[ref]$parseErrors)|Out-Null;if($parseErrors.Count -gt 0){$parseErrors|ForEach-Object{Write-Error $_.Message};exit 1};exit 0'
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $parseCommand
+            if ($LASTEXITCODE -ne 0) { throw "Generated script failed Windows PowerShell 5.1 parse validation: $scriptPath" }
+          }
+
+          Copy-Item -LiteralPath $runtimePath -Destination (Join-Path $deliveryRoot $runtimeName) -Force
+          $applyHash = (Get-FileHash -LiteralPath $applyPath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $rollbackHash = (Get-FileHash -LiteralPath $rollbackPath -Algorithm SHA256).Hash.ToUpperInvariant()
+
+          @(
+            'SCHEMA=pinggpt.delivery-bundle.v1'
+            'REVISION=R1.07'
+            'BRANCH=pinggpt-account-store-r107-001'
+            "COMMIT=$env:GITHUB_SHA"
+            "RUNTIME_PATCH_FILE=$runtimeName"
+            "RUNTIME_PATCH_SHA256=$runtimeHash"
+            "APPLY_SCRIPT_FILE=$applyName"
+            "APPLY_SCRIPT_SHA256=$applyHash"
+            "ROLLBACK_SCRIPT_FILE=$rollbackName"
+            "ROLLBACK_SCRIPT_SHA256=$rollbackHash"
+            "PAYLOAD_FILE_COUNT=$payloadCount"
+            'MODE=CODE_ONLY_EXISTING_EXE_WITH_STATE_ROLLBACK'
+          ) | Set-Content -LiteralPath $deliveryManifestPath -Encoding UTF8
+
+          $deliveryManifestHash = (Get-FileHash -LiteralPath $deliveryManifestPath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $bundlePath = Join-Path $PWD $bundleName
+          if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Force }
+          Compress-Archive -Path (Join-Path $deliveryRoot '*') -DestinationPath $bundlePath -CompressionLevel Optimal
+          $bundleHash = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $bundleSize = (Get-Item -LiteralPath $bundlePath).Length
+
+          $verifyRoot = Join-Path $PWD 'delivery-r107-verify'
+          if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $verifyRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $bundlePath -DestinationPath $verifyRoot -Force
+          $expectedNames = @($runtimeName, $applyName, $rollbackName, $manifestName) | Sort-Object
+          $actualNames = @(Get-ChildItem -LiteralPath $verifyRoot -File | Select-Object -ExpandProperty Name | Sort-Object)
+          if (($expectedNames -join '|') -cne ($actualNames -join '|')) {
+            throw "DeliveryBundle member set mismatch. Expected=$($expectedNames -join ',') Actual=$($actualNames -join ',')"
+          }
+
+          foreach ($check in @(
+            @{ Name=$runtimeName; Hash=$runtimeHash },
+            @{ Name=$applyName; Hash=$applyHash },
+            @{ Name=$rollbackName; Hash=$rollbackHash },
+            @{ Name=$manifestName; Hash=$deliveryManifestHash }
+          )) {
+            $actual = (Get-FileHash -LiteralPath (Join-Path $verifyRoot $check.Name) -Algorithm SHA256).Hash.ToUpperInvariant()
+            if ($actual -cne $check.Hash) { throw "DeliveryBundle hash mismatch after re-extract: $($check.Name)" }
+          }
+
+          @(
+            'PROJECT=PingGPT Account Store R1.07'
+            'REVISION=R1.07'
+            'BRANCH=pinggpt-account-store-r107-001'
+            "COMMIT=$env:GITHUB_SHA"
+            "BUNDLE_FILE=$bundleName"
+            "BUNDLE_SHA256=$bundleHash"
+            "BUNDLE_SIZE=$bundleSize"
+            "RUNTIME_PATCH_SHA256=$runtimeHash"
+            "APPLY_SCRIPT_SHA256=$applyHash"
+            "ROLLBACK_SCRIPT_SHA256=$rollbackHash"
+            "DELIVERY_MANIFEST_SHA256=$deliveryManifestHash"
+            "PAYLOAD_FILE_COUNT=$payloadCount"
+            'POWERSHELL51_APPLY_PARSE=PASS'
+            'POWERSHELL51_ROLLBACK_PARSE=PASS'
+            'REEXTRACT_VERIFY=PASS'
+            'FROZEN_AFTER_VERIFY=YES'
+          ) | Set-Content -LiteralPath $receiptName -Encoding UTF8
+
+      - name: Upload frozen R1.07 DeliveryBundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-r107-account-store-delivery-bundle
+          path: |
+            Working_ZIP_PingGPT_261003_AccountStore_R1.07_DeliveryBundle.zip
+            PingGPT_R1.07_DeliveryReceipt.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload R1.07 NSIS diagnostic candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinggpt-r107-account-store-nsis-diagnostic
+          path: |
+            release-r107-nsis/PingGPT-Windows-Setup-*.exe
+            release-r107-nsis/*.blockmap
+            PingGPT_R1.07_NSIS_Manifest.txt
+          if-no-files-found: error
+          retention-days: 7

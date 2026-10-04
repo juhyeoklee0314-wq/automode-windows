@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
+import { filterLogTextToWindow, LOG_RETENTION_MS } from "../src/core/log.js";
 import { redactSecrets } from "../src/core/redact.js";
 import { acquireExecutionLock, clearLease, executionLockPath, leaseIsLive, STALE_LOCK_GRACE_MS, writeLease } from "../src/gui/lease.js";
 import { defaults, loadDiagnosticPreferences, loadPreferences, preferencesPath, savePreferences } from "../src/gui/preferences.js";
 import { reliablePing } from "../src/gui/reliable-ping.js";
 import { GUI_TASK_PREFIX, schedulerExecutable, WindowsScheduler } from "../src/gui/scheduler.js";
-import { buildPingEnvironment, headlessArgv } from "../src/agents/ping.js";
+import { buildPingEnvironment, headlessArgv, pingDiagnosticTail } from "../src/agents/ping.js";
 import { accountPingEnvironment, accountPingUnsetEnvironment, elapsedMinutesForSchedule, runScheduled, runScheduledDryRun } from "../src/gui/scheduled-runner.js";
 import { recordResume, recordSuspend, recentlyResumedFromSuspend } from "../src/gui/power-state.js";
 import { QUIT_CHANNEL, registerQuitHandler } from "../src/gui/shutdown.js";
@@ -156,7 +157,10 @@ describe("GUI native control wiring", () => {
 
   it("routes scheduled modes before the normal GUI path", () => {
     assert.deepEqual(resolveProcessMode(["Automode.exe", "--scheduled-runner", "default", "0600-0"]), {
-      kind: "scheduled", accountId: "default", scheduleId: "0600-0",
+      kind: "scheduled", accountId: "default", storeId: null, scheduleId: "0600-0",
+    });
+    assert.deepEqual(resolveProcessMode(["Automode.exe", "--scheduled-runner", "default", "store-default", "0600-0"]), {
+      kind: "scheduled", accountId: "default", storeId: "store-default", scheduleId: "0600-0",
     });
     assert.deepEqual(resolveProcessMode(["Automode.exe"]), { kind: "gui" });
   });
@@ -199,6 +203,7 @@ describe("Windows GUI scheduler", () => {
     const tasks = scheduler.install([{
       id: "default", displayName: "Default", enabled: true, message: "hi",
       schedules: ["06:00", "17:00"], agent: "codex",
+      codexHome: "C:\\PingGPT\\default", storeId: "store-default",
     }]);
     assert.equal(tasks.length, 2);
     assert.ok(tasks.every((task) => task.name.startsWith(GUI_TASK_PREFIX)));
@@ -208,6 +213,7 @@ describe("Windows GUI scheduler", () => {
     const action = create![create!.indexOf("/TR") + 1]!;
     assert.match(action, /C:\\Program Files\\Automode\\Automode\.exe/);
     assert.match(action, /--scheduled-runner/);
+    assert.match(action, /store-default/);
   });
 
   it("uses the original Portable launcher instead of its temporary extraction", () => {
@@ -265,6 +271,42 @@ describe("Windows GUI scheduler", () => {
   });
 });
 
+describe("log retention and ping diagnostics", () => {
+  it("keeps only timestamped entries from the most recent 24 hours", () => {
+    const now = new Date(2026, 9, 3, 23, 19, 0).getTime();
+    const text = [
+      "[2026-10-02 23:18:59] expired",
+      "[2026-10-02 23:19:00] boundary",
+      "[2026-10-03 12:00:00] recent",
+      "[2026-10-03 23:19:00] newest",
+      "unstructured legacy text",
+    ].join("\n");
+    const filtered = filterLogTextToWindow(text, now, LOG_RETENTION_MS);
+    assert.doesNotMatch(filtered, /expired|unstructured/);
+    assert.match(filtered, /boundary/);
+    assert.match(filtered, /recent/);
+    assert.match(filtered, /newest/);
+  });
+
+  it("redacts and bounds stderr diagnostics before they reach the log", () => {
+    const raw = "x".repeat(10_000)
+      + "\n\u001b[31mAuthorization: Bearer secret-token-value\u001b[0m\n"
+      + "OPENAI_API_KEY=sk-abcdefghijk\n"
+      + "codex: account authentication failed";
+    const diagnostic = pingDiagnosticTail(raw, 1024);
+    assert.doesNotMatch(diagnostic, /secret-token-value|sk-abcdefghijk/);
+    assert.match(diagnostic, /REDACTED/);
+    assert.doesNotMatch(diagnostic, /\u001b|\r|\n/);
+    assert.ok(diagnostic.length <= 1025);
+  });
+
+  it("reads the GUI log through the 24-hour recent-log helper instead of a byte slice", () => {
+    const service = readFileSync(join(process.cwd(), "src", "gui", "service.ts"), "utf8");
+    assert.match(service, /readRecentLog\(configmod\.logPath\(\)\)/);
+    assert.doesNotMatch(service, /text\.slice\(-200_000\)/);
+  });
+});
+
 describe("reliability safeguards", () => {
   it("reclaims a lock whose owner PID is no longer alive", () => {
     const path = executionLockPath("stale-unit-test");
@@ -315,8 +357,11 @@ describe("reliability safeguards", () => {
     assert.equal(existsSync(statePath), false);
   });
 
-  it("keeps headless Codex pings ephemeral so they do not pollute task history", () => {
-    assert.deepEqual(headlessArgv("codex", "hi"), ["codex", "exec", "--ephemeral", "hi"]);
+  it("keeps headless Codex pings ephemeral and allows them outside a Git repository", () => {
+    assert.deepEqual(
+      headlessArgv("codex", "hi"),
+      ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "hi"],
+    );
   });
 
   it("applies CODEX_HOME only to an explicitly configured Codex account", () => {

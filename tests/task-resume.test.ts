@@ -81,6 +81,7 @@ describe("one-shot task resume scheduler", () => {
     const schedule = {
       id: "resume-abc",
       accountId: "profile-a",
+      storeId: "store-profile-a",
       threadId: "01a00000-0000-7000-8000-000000000001",
       title: "Task",
       runAt: new Date(Date.now() + 60_000).toISOString(),
@@ -104,9 +105,11 @@ describe("one-shot task resume scheduler", () => {
 describe("task resume wiring safety", () => {
   const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
-  it("keeps legacy/global rows non-resumable in the renderer", () => {
+  it("keeps hidden legacy/global rows outside normal resume controls", () => {
     const renderer = source("src/gui/renderer/app.js");
-    assert.match(renderer, /Cross-account unavailable/);
+    assert.match(renderer, /const userVisibleItems = data\.items\.filter\(\(item\) => item\.source === ['"]account['"]\)/);
+    assert.doesNotMatch(renderer, /Cross-account unavailable/);
+    assert.doesNotMatch(renderer, /LEGACY \/ GLOBAL/);
     assert.match(renderer, /resumeEligibility === ['"]same_profile_candidate['"]/);
     assert.match(renderer, /getAccountRateLimitStatus/);
     assert.match(renderer, /scheduleTaskResume/);
@@ -132,7 +135,7 @@ describe("task resume wiring safety", () => {
   it("prunes resume schedules that no longer have an enabled Codex account", () => {
     const service = source("src/gui/service.ts");
     assert.match(service, /resumableAccounts/);
-    assert.match(service, /taskResumeSchedules = payload\.preferences\.taskResumeSchedules/);
+    assert.match(service, /canonicalPreferences\.taskResumeSchedules = canonicalPreferences\.taskResumeSchedules/);
     assert.match(service, /filter\(\(schedule\) => resumableAccounts\.has\(schedule\.accountId\)\)/);
   });
 

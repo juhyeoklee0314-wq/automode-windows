@@ -4,6 +4,7 @@ import { acquireExecutionLock, activeExecutionLockCount } from "./lease.js";
 import { recentlyResumedFromSuspend } from "./power-state.js";
 import { loadPreferences, savePreferences } from "./preferences.js";
 import { resumeCodexTask } from "./codex-task-runtime.js";
+import { ensureActiveAccountStore } from "./account-store-runtime.js";
 import type { TaskResumeResult } from "./types.js";
 
 const MAX_CATCHUP_MS = 180 * 60 * 1000;
@@ -85,14 +86,20 @@ export async function runScheduledTaskResume(
     return { code: 75, result: null };
   }
 
-  const account = preferences.accounts.find((entry) =>
-    entry.id === schedule.accountId && entry.enabled && entry.agent === "codex");
-  if (!account) {
+  const verified = await ensureActiveAccountStore(schedule.accountId);
+  const account = verified.state === "ready" ? verified.account : null;
+  if (account && account.storeId !== schedule.storeId) {
+    log(`scheduled task resume deferred: store ${schedule.storeId} is not active for profile ${schedule.accountId}`);
+    await maybeReturnToSleep(wokeForResume, idleBaseline, idleBaselineAt, runtime);
+    return { code: 75, result: null };
+  }
+  if (!account || !account.enabled || account.agent !== "codex") {
     schedule.enabled = false;
     schedule.completedAt = now.toISOString();
     schedule.lastStatus = "rejected";
     savePreferences(preferences);
     onConsumed?.(schedule.id);
+    log(`scheduled task resume rejected: ${verified.detail}`);
     await maybeReturnToSleep(wokeForResume, idleBaseline, idleBaselineAt, runtime);
     return { code: 64, result: null };
   }

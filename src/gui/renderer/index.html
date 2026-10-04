@@ -39,8 +39,8 @@
       </section>
 
       <section class="page" id="page-automation">
-        <article class="card accent-card"><div class="card-title"><div><h3>Auto Ping</h3><p>Enable or disable all PingGPT-managed account schedules. Each account below keeps its own agent, login profile, message, catch-up window, and ping times.</p></div><label class="switch"><input id="auto-ping" type="checkbox"><span></span></label></div></article>
-        <article class="card"><div class="card-title"><div><h3>Ping accounts</h3><p>Add as many target accounts as needed. New Codex profiles use isolated CODEX_HOME folders so ChatGPT logins do not overwrite each other.</p></div><button class="secondary small" id="add-account">+ Add account</button></div><div id="account-list" class="account-list"></div><p class="muted account-note">Deleting a profile removes its PingGPT schedule after Save. Its Codex login folder is intentionally left on disk.</p></article>
+        <article class="card accent-card"><div class="card-title"><div><h3>Auto Ping</h3><p>Enable or disable all PingGPT-managed schedules. Each profile runs only its currently connected account store.</p></div><label class="switch"><input id="auto-ping" type="checkbox"><span></span></label></div></article>
+        <article class="card"><div class="card-title"><div><h3>Profiles</h3><p>Each profile shows only its currently connected ChatGPT account. Use Manage account to reconnect or switch without mixing account stores.</p></div><button class="secondary small" id="add-account">+ Add profile</button></div><div id="account-list" class="account-list"></div><p class="muted account-note">Deleting a profile removes it from PingGPT after Save. Stored account data is never reassigned to another ChatGPT account.</p></article>
         <article class="card"><div class="card-title"><div><h3>Scheduler state</h3><p>Only PingGPT-managed GUI tasks are managed. Existing CLI tasks are untouched.</p></div></div><div id="task-list" class="task-list"></div><p class="path" id="config-path"></p></article>
       </section>
 
@@ -49,7 +49,7 @@
           <div class="card-title task-card-title">
             <div>
               <h3>Codex tasks</h3>
-              <p>Tasks are read from each isolated ChatGPT account profile plus the legacy global Codex store. Discovery is read-only.</p>
+              <p>Tasks are shown only from each profile's active verified ChatGPT account store. Discovery is read-only.</p>
             </div>
             <div class="task-toolbar">
               <input id="task-search" class="task-search" type="search" maxlength="160" placeholder="Search tasks" aria-label="Search tasks">
@@ -61,13 +61,13 @@
         </article>
         <article class="card">
           <div class="card-title">
-            <div><h3>Scheduled resumes</h3><p>One-shot task resumes. Each schedule is bound to one account profile and one task snapshot.</p></div>
+            <div><h3>Scheduled resumes</h3><p>One-shot task resumes. Each schedule is bound to one profile, one exact account store, and one task snapshot.</p></div>
           </div>
           <div id="task-resume-schedule-list" class="task-resume-schedule-list"></div>
         </article>
         <article class="card note">
           <h3>Resume compatibility</h3>
-          <p>Tasks already stored inside a PingGPT account profile are candidates for same-profile resume. Legacy / Global tasks are shown for discovery only because current Codex local storage cannot safely resume a paginated global task through a different isolated account store.</p>
+          <p>Tasks inside the active verified account store are candidates for same-profile resume. Resume and scheduling remain bound to that exact profile and account store.</p>
         </article>
       </section>
 

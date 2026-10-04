@@ -9,7 +9,7 @@ import { clearLease, writeLease } from "./lease.js";
 import { exportDiagnosticSnapshot } from "./diagnostic-export.js";
 import { DIAGNOSTIC_CHANNEL } from "./channels.js";
 import { BUILD_IDENTITY, DIAGNOSTIC_LOG_PATH, DIAGNOSTIC_RECEIPT_PATH, DiagnosticTrace } from "./diagnostics.js";
-import { loadDiagnosticPreferences, loadPreferences, savePreferences } from "./preferences.js";
+import { activeTaskResumeSchedules, loadDiagnosticPreferences, loadPreferences, savePreferences } from "./preferences.js";
 import { requestWindowsSleep } from "./power-control.js";
 import { recordResume, recordSuspend } from "./power-state.js";
 import { resolveProcessMode } from "./routing.js";
@@ -54,12 +54,12 @@ if (mode.kind === "scheduled-task-resume") {
       isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
       getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
       requestSleep: () => requestWindowsSleep(),
-    }))
+    }, mode.storeId))
     .then((code) => app.exit(code))
     .catch(() => app.exit(1));
 } else if (mode.kind === "scheduled-dry-run") {
   trace.emit("START_02_MODE_ROUTED", "dry_run");
-  runScheduledDryRun(mode.accountId, mode.scheduleId, new Date(), trace).then((code) => app.exit(code));
+  runScheduledDryRun(mode.accountId, mode.scheduleId, new Date(), trace, mode.storeId).then((code) => app.exit(code));
 } else {
   trace.emit("START_02_MODE_ROUTED", "gui");
   startGui();
@@ -247,7 +247,7 @@ function startGui(): void {
       });
     }
     try {
-      taskResumeScheduler.sync(preferences.taskResumeSchedules);
+      taskResumeScheduler.sync(activeTaskResumeSchedules(preferences));
     } catch {
       trace.emit("TASK_RESUME_SCHEDULER_SYNC_FAILED", "main");
     }
@@ -298,6 +298,16 @@ function startGui(): void {
     ipcMain.handle("automode:set-scheduler", (_event, enabled: boolean) => service.setScheduler(Boolean(enabled)));
     ipcMain.handle("automode:set-login", (_event, enabled: boolean) => setRunAtLogin(Boolean(enabled)));
     ipcMain.handle("automode:new-account-profile", () => service.newAccountProfile());
+    ipcMain.handle("automode:account-stores", (_event, profileId: unknown) =>
+      service.getAccountStores(String(profileId ?? "")));
+    ipcMain.handle("automode:account-store-create", (_event, profileId: unknown) =>
+      service.createAccountStore(String(profileId ?? "")));
+    ipcMain.handle("automode:account-store-auth-status", (_event, profileId: unknown, storeId: unknown) =>
+      service.getAccountStoreAuthStatus(String(profileId ?? ""), String(storeId ?? "")));
+    ipcMain.handle("automode:account-store-connect", (_event, profileId: unknown, storeId: unknown) =>
+      service.connectAccountStore(String(profileId ?? ""), String(storeId ?? "")));
+    ipcMain.handle("automode:account-store-activate", (_event, profileId: unknown, storeId: unknown) =>
+      service.activateAccountStore(String(profileId ?? ""), String(storeId ?? "")));
     ipcMain.handle("automode:account-auth-status", (_event, accountId: unknown) =>
       service.getAccountAuthStatus(String(accountId ?? "")));
     ipcMain.handle("automode:account-connect", (_event, accountId: unknown) =>
